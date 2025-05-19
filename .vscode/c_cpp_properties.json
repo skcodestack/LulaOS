@@ -1,0 +1,19 @@
+{
+    "configurations": [
+        {
+            "name": "OS_DEV",
+            "includePath": [
+                "${workspaceFolder}/includes/**"
+            ],
+            "compilerArgs": [
+                "-ffreestanding",
+                "-m32"
+            ],
+            "defines": [],
+            "compilerPath": "D:/application/x86_64_elf_tools_windows/bin/x86_64-elf-gcc.exe",
+            "cStandard": "gnu99",
+            "intelliSenseMode": "gcc-x86"
+        }
+    ],
+    "version": 4
+}
