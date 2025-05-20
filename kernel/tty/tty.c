@@ -11,13 +11,23 @@ vga_attribute theme_color = VGA_COLOR_BLACK;
 uint32_t TTY_COLOUMN = 0;
 uint32_t TTY_ROW = 0;
 
+
 void tty_set_theme(vga_attribute fg, vga_attribute bg)
 {
     theme_color = (bg << 4 | fg) << 8;
 }
 
 void tty_put_char(char c)
-{
+{   
+     if(c == '\n'){
+        TTY_COLOUMN = 0;
+        TTY_ROW++;
+        if (TTY_ROW > TTY_HEIGHT)
+        {
+            tty_scroll_up();
+        }
+        return;
+     }
     *(vga_buffer + TTY_COLOUMN + TTY_ROW * TTY_WIDTH) = (theme_color | c);
     TTY_COLOUMN++;
     if (TTY_COLOUMN >= TTY_WIDTH)
@@ -33,7 +43,7 @@ void tty_put_char(char c)
 
 void tty_put_string(char *str)
 {
-    while (*str != '/0')
+    while (*str != '\0')
     {
         /* code */
         tty_put_char(*str);

@@ -16,16 +16,16 @@ OS_NAME := LulaOS
 OS_BIN := $(OS_NAME).bin
 OS_IOS := $(OS_NAME).iso
 
-CC := x86_64-elf-gcc
-AS := x86_64-elf-as
+CC := i686-elf-gcc
+AS := i686-elf-as
 
 O := -O3
-W := -Wall -Wextra -Werror
-CFLAGS := -m32 -std=gnu99 -ffreestanding ${O} ${W}  #-fno-stack-protector -fno-builtin -fno-exceptions -fno-rtti -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-threadsafe-statics -fno-strict-aliasing -fno-omit-frame-pointer -fno-zero-initialized-in-bss -fno-stack-clash-protection -fno-stack-protector -f
+W := -Wall -Wextra -Wextra
+CFLAGS :=  -std=gnu99 -ffreestanding ${O} ${W}  #-fno-stack-protector -fno-builtin -fno-exceptions -fno-rtti -fno-asynchronous-unwind-tables -fno-unwind-tables -fno-threadsafe-statics -fno-strict-aliasing -fno-omit-frame-pointer -fno-zero-initialized-in-bss -fno-stack-clash-protection -fno-stack-protector -f
 LDFLAGS := -ffreestanding ${O} -nostdlib -lgcc # -T link.ld  -nostdlib -nodefaultlibs -nostartfiles -lgcc
 
-SOURCES := $(shell lfind -name "*.[cS]")
-SRC := ${patsubst ./%, ${OBJECT_DIR}/%, ${SOURCES}} 
+SOURCES_FILES := $(shell find -name "*.[cS]")
+SRC := ${patsubst ./%, ${OBJECT_DIR}/%.o, ${SOURCES_FILES}} 
 
 $(OBJECT_DIR):
 	@mkdir -p $@
@@ -40,7 +40,7 @@ $(ISO_DIR):
 
 $(OBJECT_DIR)/%.S.o: %.S 
 	@mkdir -p $(@D)
-	$(AS) $< -o $@
+	$(CC) -c $< -o $@
 
 $(OBJECT_DIR)/%.c.o: %.c
 	@mkdir -p $(@D)
@@ -48,12 +48,12 @@ $(OBJECT_DIR)/%.c.o: %.c
 
 $(BIN_DIR)/$(OS_BIN):$(OBJECT_DIR) $(BIN_DIR) $(SRC)
 	echo "Linking $(SRC)..."
-	$(CC) -T linder.lds -o $@  $(SRC) $(LDFLAGS)
+	$(CC) -T linker.lds -o $@  $(SRC) $(LDFLAGS)
 
 $(BUILD_DIR)/$(OS_IOS): $(ISO_DIR) $(BIN_DIR)/$(OS_BIN) GRUB_TEMPLATE
-	@./config-grub.sh $(OS_NAME) > $(ISO_GRUB_DIR) $(ISO_GRUB_DIR)/grub.cfg
+	@./config-grub.sh $(OS_NAME) >  $(ISO_GRUB_DIR)/grub.cfg
 	@cp $(BIN_DIR)/$(OS_BIN) $(ISO_BOOT_DIR)
-	# @grub-mkrescue -o $(BUILD_DIR)/$(OS_IOS) $(ISO_DIR)
+	@grub-mkrescue -o $(BUILD_DIR)/$(OS_IOS) $(ISO_DIR)
 
 all: clean $(BUILD_DIR)/$(OS_IOS)
 
@@ -61,22 +61,22 @@ all-debug: O := -O0
 all-debug: CFLAGS := -m32 -g -std=gnu99 -ffreestanding $(O) $(W) -fomit-frame-pointer
 all-debug: LDFLAGS :=  -ffreestanding $(O)   -nostdlib -lgcc
 all-debug: clean $(BUILD_DIR)/$(OS_IOS)
-	@x86_64-elf-objdump -D $(BIN_DIR)/$(OS_BIN) > dump
+	@i686-elf-objdump -D $(BIN_DIR)/$(OS_BIN) > dump
 
 
 clean : 
 	@rm -rf $(BUILD_DIR)
 
 run: $(BUILD_DIR)/$(OS_IOS)
-	@qemu-system-x86_64 -cdrom $(BUILD_DIR)/$(OS_IOS)
+	@qemu-system-i386 -cdrom $(BUILD_DIR)/$(OS_IOS)
 
 debug-qemu: all-debug
 	@objcopy --only-keep-debug $(BIN_DIR)/$(OS_BIN) $(BUILD_DIR)/kernel.dbg
-	@qemu-system-x86_64 -s -S -kernel $(BIN_DIR)/$(OS_BIN) &
+	@qemu-system-i386 -s -S -kernel $(BIN_DIR)/$(OS_BIN) &
 	@gdb -s $(BUILD_DIR)/kernel.dbg -ex "target remote localhost:1234"
 
 debug-bochs: all-debug
-	@bochsdbg -q -f ./bochsrc.bxrc 	
+	@bochs -q -f ./bochs.cfg 	
 
 
 

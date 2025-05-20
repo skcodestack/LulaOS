@@ -1,6 +1,7 @@
 {
     "files.associations": {
         "tty.h": "c",
-        "stdint.h": "c"
+        "stdint.h": "c",
+        "cstdint": "c"
     }
 }
