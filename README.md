@@ -25,6 +25,7 @@
     ```
 
 - bochs emulator
+  
   1.download bochs source from [bochs 3.0](https://sourceforge.net/projects/bochs/files/bochs/3.0/)
   
   2.install dependence
@@ -33,8 +34,6 @@
   sudo apt install  libgtk2.0-dev libsdl1.2-dev libx11-dev libncurses5-dev libncursesw5-dev
   ```
   3.compile and install
-  
-    below is the compile script
 
   ``` 
   export CC=gcc
