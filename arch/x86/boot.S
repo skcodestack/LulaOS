@@ -20,16 +20,17 @@
        
         call _kernel_init
 
-        lgdt $_gdt_pointer
+         
+        lgdt _gdt_pointer
 
-        movw %0x10,%ax
+        movw $0x10,%ax
         movw %ax,%ds
         movw %ax,%es
         movw %ax,%fs
         movw %ax,%gs
         movw %ax,%ss
 
-        movel $entry_kernel, %eax
+        movl $entry_kernel, %eax
         pushw $0x08                     
 	    pushl %eax 
         retf
@@ -61,6 +62,6 @@
 
     _gdt_pointer:
     _gdt_limit:	.word	_gdt_end - _gdt - 1  
-    _gdt_base:	.quad	_gdt
+    _gdt_base:	.long	_gdt
 
 

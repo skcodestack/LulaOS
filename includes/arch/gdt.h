@@ -6,7 +6,7 @@
 #define SEG_TYPE(x) (x << 8)      // Segemnt type (readable/writable, expand down, conforming/expanding)
 #define SEG_DESCTYPE(x) (x << 12) // Descriptor type (0 for system, 1 for code/data)
 #define SEG_DPL(x) (x << 13)      // Descriptor Privilege Level (0-3)
-#define SEG_PRES(x) (x << 14)     // Segement Present
+#define SEG_PRES(x) (x << 15)     // Segement Present
 #define SEG_AVL(x) (x << 20)      // Available for use by system software
 #define SEG_LONG(x) (x << 21)     // 64-bit code segement(IA-32e mode only) long mode
 #define SEG_DB(x) (x << 22)       // 32-bit mode (0 for 16-bit, 1 for 32-bit)
@@ -39,14 +39,9 @@
 #define SEG_DATA_PL0 SEG_TYPE(SEG_DATA_RDWR) | SEG_DESCTYPE(1) | SEG_DPL(0) | SEG_PRES(1) | SEG_AVL(0) | SEG_LONG(0) | SEG_DB(1) | SEG_GRAN(1)
 #define SEG_CODE_PL3 SEG_TYPE(SEG_CODE_EXRD) | SEG_DESCTYPE(1) | SEG_DPL(3) | SEG_PRES(1) | SEG_AVL(0) | SEG_LONG(0) | SEG_DB(1) | SEG_GRAN(1)
 #define SEG_DATA_PL3 SEG_TYPE(SEG_DATA_RDWR) | SEG_DESCTYPE(1) | SEG_DPL(3) | SEG_PRES(1) | SEG_AVL(0) | SEG_LONG(0) | SEG_DB(1) | SEG_GRAN(1)
-
-struct desc_struct 
-{
-	unsigned char x[8];
-};
-
+ 
 //boot.S 中的.globel _gdt
-extern struct desc_struct _gdt[];
+extern uint64_t _gdt[];
 
 // initialize gdt
 void _init_gdt();
