@@ -12,7 +12,7 @@
 #define ENTRY(sym)  \
     .globl SYMBOL_NAME(sym); \
     .type SYMBOL_NAME(sym),@function; \
-    SYMBOL_NAME_LABEL(sym):
+    SYMBOL_NAME_LABEL(sym)
 
 
 #endif

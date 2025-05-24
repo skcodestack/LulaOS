@@ -1,5 +1,5 @@
-#include <linker.h>
-#include <segment.h>
+#include <linkage.h>
+#include <arch/segment.h>
 
 EBX = 0x00
 ECX = 0x04
@@ -45,7 +45,7 @@ ENTRY(ret_from_intr)
 
 interrupt_warpper:
     pushl %eax
-    movl %ds,, %eax
+    movl %ds, %eax
     pushl %eax
     movl %es, %eax
     pushl %eax

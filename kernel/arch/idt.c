@@ -5,6 +5,7 @@
 #include <arch/segment.h>
 #include <printk.h>
 #include <stddef.h>
+ 
 
 // 30 system interrupt
 asmlinkage void divide_error(void);
@@ -62,14 +63,14 @@ void show_registers(struct pt_regs *regs)
         esp = regs->esp;
         ss = regs->ss & 0xffff;
     }
-    printk("CPU:    %d\nEIP:    %04x:[<%08lx>]    %s\nEFLAGS: %08lx\n",
-           smp_processor_id(), 0xffff & regs->cs, regs->eip, print_tainted(), regs->eflags);
-    printk("eax: %08lx   ebx: %08lx   ecx: %08lx   edx: %08lx\n",
-           regs->eax, regs->ebx, regs->ecx, regs->edx);
-    printk("esi: %08lx   edi: %08lx   ebp: %08lx   esp: %08lx\n",
-           regs->esi, regs->edi, regs->ebp, esp);
-    printk("ds: %04x   es: %04x   ss: %04x\n",
-           regs->ds & 0xffff, regs->es & 0xffff, ss);
+    // printk("CPU:    %d\nEIP:    %04x:[<%08lx>]    %s\nEFLAGS: %08lx\n",
+    //        smp_processor_id(), 0xffff & regs->cs, regs->eip, "", regs->eflags);
+    // printk("eax: %08lx   ebx: %08lx   ecx: %08lx   edx: %08lx\n",
+    //        regs->eax, regs->ebx, regs->ecx, regs->edx);
+    // printk("esi: %08lx   edi: %08lx   ebp: %08lx   esp: %08lx\n",
+    //        regs->esi, regs->edi, regs->ebp, esp);
+    // printk("ds: %04x   es: %04x   ss: %04x\n",
+    //        regs->ds & 0xffff, regs->es & 0xffff, ss);
     // printk("Process %s (pid: %d, stackpage=%08lx)",
     // 	current->comm, current->pid, 4096+(unsigned long)current);
     /*
@@ -80,7 +81,7 @@ void show_registers(struct pt_regs *regs)
     {
 
         printk("\nStack: ");
-        show_stack((unsigned long *)esp);
+        // show_stack((unsigned long *)esp);
 
         printk("\nCode: ");
         // if(regs->eip < PAGE_OFFSET)
@@ -163,31 +164,32 @@ asmlinkage void do_invalid_TSS(struct pt_regs *regs, long error_code)
     printk("Segment Selector Index:%#010x\n", error_code & 0xfff8);
 }
 
-void _set_idt_entry(uint8_t index, uint16_t selector, uint32_t offset, uint16_t type_attr)
+void _set_idt_entry(uint8_t index, uint16_t selector, void* func, uint16_t type_attr)
 {
+    uint32_t offset = (uint32_t) func;
     uint64_t desciptor = type_attr | IDT_OFFSET_H(offset);
     desciptor <<= 32;
     desciptor |= IDT_OFFSET_L(offset) | IDT_SEGMENT_SELECTOR(selector);
     _idt[index] = desciptor;
 }
 
-void _set_task_gate_entry(uint8_t index, uint16_t selector)
+void _set_task_gate_entry(uint8_t index)
 {
-    _set_idt_entry(index, selector, 0, IDT_TYPE_ATTR_TASK_GATE);
+    _set_idt_entry(index, __KERNEL_CS, 0, IDT_TYPE_ATTR_TASK_GATE);
 }
 
-void _set_interrupt_gate_entry(uint8_t index, uint16_t selector, uint32_t offset)
+void _set_interrupt_gate_entry(uint8_t index, void* func)
 {
-    _set_idt_entry(index, selector, offset, IDT_TYPE_ATTR_INTERRUPT_GATE_32BIT);
+    _set_idt_entry(index, __KERNEL_CS, func, IDT_TYPE_ATTR_INTERRUPT_GATE_32BIT);
 }
 
-void _set_trap_gate_entry(uint8_t index, uint16_t selector, uint32_t offset)
+void _set_trap_gate_entry(uint8_t index, void* func)
 {
-    _set_idt_entry(index, selector, offset, IDT_TYPE_ATTR_TRAP_GATE_32BIT);
+    _set_idt_entry(index, __KERNEL_CS, func, IDT_TYPE_ATTR_TRAP_GATE_32BIT);
 }
-void _set_system_gate_entry(uint8_t index, uint16_t selector, uint32_t offset)
+void _set_system_gate_entry(uint8_t index, void* func)
 {
-    _set_idt_entry(index, selector, offset, IDT_TYPE_ATTR_SYSTEM_GATE_32BIT);
+    _set_idt_entry(index, __KERNEL_CS, func, IDT_TYPE_ATTR_SYSTEM_GATE_32BIT);
 }
 
 void _init_idt()
@@ -195,7 +197,7 @@ void _init_idt()
     // 30 system interrupt
     _set_trap_gate_entry(0, &divide_error);
     _set_trap_gate_entry(1, &debug);
-    set_intr_gate(2, &nmi);
+    _set_interrupt_gate_entry(2, &nmi);
     _set_system_gate_entry(3, &int3);
     _set_system_gate_entry(4, &overflow);
     _set_system_gate_entry(5, &bounds);

@@ -28,13 +28,13 @@
 
 extern uint64_t _idt[]; 
 
-void _set_task_gate_entry(uint8_t index, uint16_t selector);
+void _set_task_gate_entry(uint8_t index);
 
-void _set_interrupt_gate_entry(uint8_t index, uint16_t selector, uint32_t offset);
+void _set_interrupt_gate_entry(uint8_t index, void* func);
 
-void _set_trap_gate_entry(uint8_t index, uint16_t selector, uint32_t offset);
+void _set_trap_gate_entry(uint8_t index, void* func);
 
-void _set_system_gate_entry(uint8_t index, uint16_t selector, uint32_t offset);
+void _set_system_gate_entry(uint8_t index, void* func);
 
 void _init_idt();
 #endif
