@@ -2,6 +2,7 @@
 #include <tty/tty.h>
 #include <stdarg.h>
 #include <printk.h>
+#include <libs/vsprintf.h>
 
 void printk(const char *fmt, ...)
 {
@@ -10,7 +11,7 @@ void printk(const char *fmt, ...)
     char *p;
 
     va_start(args, fmt);
-    vprintk(printk_buf,sizeof(printk_buf),fmt, args);
+    vsnprintf(printk_buf,sizeof(printk_buf),fmt, args);
     va_end(args);
 
     tty_put_string(printk_buf);
