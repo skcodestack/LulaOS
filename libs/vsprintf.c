@@ -21,8 +21,16 @@
 
 #define isdigit(c)	((c) >= '0' && (c) <= '9')
  
-
  
+
+static int do_div(n,base) 
+{
+	int __res; 
+	__asm__("divl %%ecx":"=a" (n),"=d" (__res):"0" (n),"1" (0),"c" (base));
+	return __res;
+}
+
+
 static int skip_atoi(const char **s)
 {
 	int i=0;
@@ -31,6 +39,8 @@ static int skip_atoi(const char **s)
 		i = i*10 + *((*s)++) - '0';
 	return i;
 }
+
+
 
 #define ZEROPAD	1		/* pad with zero */
 #define SIGN	2		/* unsigned/signed long */

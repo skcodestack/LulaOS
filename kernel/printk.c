@@ -7,7 +7,7 @@
 void printk(const char *fmt, ...)
 {
     va_list args;
-    static char printk_buf[1024];
+    static char printk_buf[4096];
     char *p;
 
     va_start(args, fmt);
