@@ -23,12 +23,19 @@
  
  
 
-static int do_div(n,base) 
-{
-	int __res; 
-	__asm__("divl %%ecx":"=a" (n),"=d" (__res):"0" (n),"1" (0),"c" (base));
-	return __res;
-}
+
+#define do_div(n,base) ({ \
+	unsigned long __upper, __low, __high, __mod; \
+	asm("":"=a" (__low), "=d" (__high):"A" (n)); \
+	__upper = __high; \
+	if (__high) { \
+		__upper = __high % (base); \
+		__high = __high / (base); \
+	} \
+	asm("divl %2":"=a" (__low), "=d" (__mod):"rm" (base), "0" (__low), "1" (__upper)); \
+	asm("":"=A" (n):"a" (__low),"d" (__high)); \
+	__mod; \
+})
 
 
 static int skip_atoi(const char **s)

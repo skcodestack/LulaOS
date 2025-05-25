@@ -106,7 +106,7 @@ static void inline do_trap(int trapnr, char *str, struct pt_regs *regs, long err
 {
     unsigned long *p = NULL;
     p = (unsigned long *)(regs->esp + 0x98);
-    printk("trap:%d %s,ERROR_CODE:%#018lx,RSP:%#018lx,RIP:%#018lx\n", trapnr, str, error_code, regs->esp, *p);
+    printk("trap:%d %s,ERROR_CODE:%d,regs_error_code:%d,RSP:%#018lx,RIP:%#018lx\n", trapnr, str, error_code,regs->error_code, regs->esp, *p);
 
     if (!(regs->cs & 3))
         goto kernel_trap;

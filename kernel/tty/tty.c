@@ -6,7 +6,7 @@
 
 vga_attribute *vga_buffer = (vga_attribute *)0xB8000;
 
-vga_attribute theme_color = VGA_COLOR_BLACK;
+vga_attribute theme_color = (VGA_COLOR_BLACK << 4 | VGA_COLOR_WHITE) << 8;
 
 uint32_t TTY_COLOUMN = 0;
 uint32_t TTY_ROW = 0;

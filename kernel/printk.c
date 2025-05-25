@@ -7,11 +7,11 @@
 void printk(const char *fmt, ...)
 {
     va_list args;
-    static char printk_buf[4096];
+    static char printk_buf[4096]={0};
     char *p;
 
     va_start(args, fmt);
-    vsnprintf(printk_buf,sizeof(printk_buf),fmt, args);
+    vsprintf(printk_buf, fmt, args);
     va_end(args);
 
     tty_put_string(printk_buf);

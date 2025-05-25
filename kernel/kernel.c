@@ -1,4 +1,4 @@
-#include <tty/tty.h>
+#include <printk.h>
 #include <arch/gdt.h>
 #include <arch/idt.h>
 #include <linkage.h>
@@ -12,6 +12,6 @@ void _kernel_init()
 
 asmlinkage _kernel_main(void *info_table)
 {
-    tty_set_theme(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
-    tty_put_string("Hello World!\nThis is LulaOS");
+   
+    printk("Hello World!\nThis is LulaOS");
 }
