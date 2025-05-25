@@ -5,8 +5,6 @@
         "cstdint": "c",
         "gdt.h": "c",
         "vsprintf.h": "c",
-        "prrr.h": "c",
         "linkage.h": "c",
-        "font.h": "c"
     }
 }
