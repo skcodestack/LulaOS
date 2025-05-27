@@ -1,7 +1,7 @@
 #include <printk.h>
-#include <arch/gdt.h>
-#include <arch/idt.h>
-#include <linkage.h>
+#include <arch/x86/gdt.h>
+#include <arch/x86/idt.h>
+#include <arch/linkage.h>
 #include <interrupts/interrupts.h>
 void _kernel_init()
 {

@@ -2,7 +2,7 @@
 #define __IDT_H__
 
 #include <stdint.h>
-#include <linkage.h>
+#include <arch/linkage.h>
 
 #define IDT_RESERVED(x) (x)              // reserved must be set 0
 #define IDT_GATE_TYPE(x) (x << 8)        // gate type

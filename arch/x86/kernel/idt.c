@@ -1,5 +1,5 @@
 #include <arch/x86/idt.h>
-#include <linkage.h>
+#include <arch/linkage.h>
 #include <arch/x86/ptrace.h>
 #include <tty/tty.h>
 #include <arch/x86/segment.h>

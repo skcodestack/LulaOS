@@ -1,3 +1,5 @@
+include config/make-debug-tool
+
 OS_ARCH := x86
 
 BUILD_DIR = build
@@ -61,18 +63,23 @@ all-debug: O := -O0
 all-debug: CFLAGS := -m32 -g -std=gnu99 -ffreestanding $(O) $(W) -fomit-frame-pointer
 all-debug: LDFLAGS :=  -ffreestanding $(O)   -nostdlib -lgcc
 all-debug: clean $(BUILD_DIR)/$(OS_IOS)
-	@i686-elf-objdump -D $(BIN_DIR)/$(OS_BIN) > dump
+	@echo "Dumping the disassembled kernel code to $(BUILD_DIR)/kdump.txt"
+	@i686-elf-objdump -D $(BIN_DIR)/$(OS_BIN) > $(BUILD_DIR)/kdump.txt
 
 
 clean : 
 	@rm -rf $(BUILD_DIR)
 
 run: $(BUILD_DIR)/$(OS_IOS)
-	@qemu-system-i386 -cdrom $(BUILD_DIR)/$(OS_IOS)
+	@qemu-system-i386 -cdrom $(BUILD_DIR)/$(OS_ISO) -monitor telnet::$(QEMU_MON_PORT),server,nowait &
+	@sleep 1
+	@telnet 127.0.0.1 $(QEMU_MON_PORT)
 
 debug-qemu: all-debug
-	@objcopy --only-keep-debug $(BIN_DIR)/$(OS_BIN) $(BUILD_DIR)/kernel.dbg
-	@qemu-system-i386 -s -S -kernel $(BIN_DIR)/$(OS_BIN) &
+	@i686-elf-objcopy --only-keep-debug $(BIN_DIR)/$(OS_BIN) $(BUILD_DIR)/kernel.dbg
+	@qemu-system-i386 -s -S -cdrom $(BUILD_DIR)/$(OS_ISO) -monitor telnet::$(QEMU_MON_PORT),server,nowait &
+	@sleep 1
+	@$(QEMU_MON_TERM) -e "telnet 127.0.0.1 $(QEMU_MON_PORT)"
 	@gdb -s $(BUILD_DIR)/kernel.dbg -ex "target remote localhost:1234"
 
 debug-bochs: all-debug

@@ -1,4 +1,4 @@
-#include <linkage.h>
+#include <arch/linkage.h>
 #include <arch/x86/ptrace.h>
 #include <stddef.h>
 #include <printk.h>

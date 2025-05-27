@@ -1,4 +1,4 @@
-#include <linkage.h>
+#include <arch/linkage.h>
 #include <tty/tty.h>
 #include <stdarg.h>
 #include <printk.h>

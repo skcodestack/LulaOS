@@ -56,7 +56,7 @@ page_pde_offset = (__PAGE_OFFSET >> 20);
         loop 2b
         leal (INIT_MAP_BEYOND_END + 0x007)(%edi),%ebp
         cmpl %ebp,%eax
-        jb 1f        
+        jb 1b        
         
         xorl %ebx,%ebx				/* This is the boot CPU (BSP) */
 	    jmp 3f
@@ -85,7 +85,7 @@ page_after:
         movw %ax,%fs
         movw %ax,%gs
         movw %ax,%ss
-        movq _stack_start(%rip),%esp 
+        movl $stack_start,%esp 
 
         call _kernel_init
         /* load GDT */  
@@ -144,7 +144,7 @@ page_after:
         .fill 8092,1,0
 
     /* page table dir */
-    section .bss.page_table
+.section .bss.page_table
     .global swapper_pg_dir
     swapper_pg_dir:
         .fill 1024,4,0

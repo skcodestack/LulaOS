@@ -1,5 +1,5 @@
 
-LOAD_OFFSET=0xC0000000
+/* LOAD_OFFSET=0xC0000000 */
 ENTRY(phy_start_)
 SECTIONS
 {   
@@ -17,22 +17,22 @@ SECTIONS
     } */
 
     /* . += LOAD_OFFSET;  */
-    phy_start_ = start_ - LOAD_OFFSET;
-    . = LOAD_OFFSET + 0x100000;
-    .text BLOCK(4K): AT(ADDR(.text) - LOAD_OFFSET)
+    phy_start_ = start_ - 0xC0000000;
+    . = 0xC0000000 + 0x100000;
+    .text BLOCK(4K): AT(ADDR(.text) - 0xC0000000)
     {   
         * (.multiboot)
         * (.text) 
     }
-    .data BLOCK(4K) : AT(ADDR(.data) - LOAD_OFFSET)
+    .data BLOCK(4K) : AT(ADDR(.data) - 0xC0000000)
     {			 
 	    *(.data) 
 	} 
-    .rodata BLOCK(4K): AT(ADDR(.rodata) - LOAD_OFFSET)
+    .rodata BLOCK(4K): AT(ADDR(.rodata) - 0xC0000000)
     {
         *(.rodata)
     }
-    .bss BLOCK(4K): AT(ADDR(.bss) - LOAD_OFFSET)
+    .bss BLOCK(4K): AT(ADDR(.bss) - 0xC0000000)
     {
         *(COMMON)
         *(.bss)

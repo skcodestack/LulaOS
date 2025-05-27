@@ -1,5 +1,5 @@
-#include <linkage.h>
-#include <arch/segment.h>
+#include <arch/linkage.h>
+#include <arch/x86/segment.h>
 
 EBX = 0x00
 ECX = 0x04
