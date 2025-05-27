@@ -1,4 +1,4 @@
-#include <arch/gdt.h>
+#include <arch/x86/gdt.h>
  
 // create segment descriptor
 void _set_gdt_entry(uint32_t index,uint32_t base, uint32_t limit, uint32_t access)

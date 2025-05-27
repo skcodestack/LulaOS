@@ -1,8 +1,8 @@
-#include <arch/idt.h>
+#include <arch/x86/idt.h>
 #include <linkage.h>
-#include <arch/ptrace.h>
+#include <arch/x86/ptrace.h>
 #include <tty/tty.h>
-#include <arch/segment.h>
+#include <arch/x86/segment.h>
 #include <printk.h>
 #include <stddef.h>
  

@@ -1,5 +1,5 @@
 #include <linkage.h>
-#include <arch/ptrace.h>
+#include <arch/x86/ptrace.h>
 #include <stddef.h>
 #include <printk.h>
 
