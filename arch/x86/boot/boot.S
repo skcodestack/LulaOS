@@ -1,15 +1,19 @@
+#define __ASM__ 1
 #include <arch/x86/boot/multiboot.h>
 #include <arch/x86/page.h>
 #include <arch/x86/segment.h>
 #include <arch/linkage.h>
 #include <arch/x86/thread_info.h>
+
+#define MB_FLAGS    MULTIBOOT_MEMORY_INFO | MULTIBOOT_PAGE_ALIGN
 /* 内存bitmap ,存放在  内核+PGD+PDE后*/
-#define INIT_MAP_BEYOND_END	(128*1024) 
+#define INIT_MAP_BEYOND_END	(128*1024)
+#define PAGE_OFFSET_INDEX (__PAGE_OFFSET >> 20) /* page table index*/
 
 .section .multiboot
-    .long MB_MAGIC
+    .long MULTIBOOT_MAGIC
     .long MB_FLAGS
-    .long MB_CHKSUM
+    .long CHECKSUM(MB_FLAGS)
 
 .section .bss
     /* Accoding to   System V ABI, the stack should be 16-byte aligned */
@@ -23,79 +27,66 @@
     .type start_,@function 
     start_: 
 
-        lgdt _gdt_pointer - __PAGE_OFFSET
-        
-        movw $__KERNEL_DS,%ax
-        movw %ax,%ds
-        movw %ax,%es
-        movw %ax,%fs
-        movw %ax,%gs
-        movw %ax,%ss
-
         movl $(stack_top-__PAGE_OFFSET) , %esp
-
+        /**/
         
-
+        /* 初始化页表   */ 
         cld
-        /* 初始化页表   */
-page_pde_offset = (__PAGE_OFFSET >> 20);
-        movl $(pg0 - __PAGE_OFFSET),%edi
-        movl $(swapper_pg_dir - __PAGE_OFFSET),%edx
-        movl $0x007, %eax			/* 0x007 = PRESENT+RW+USER */
+        movl $(pg0 - __PAGE_OFFSET),%edi 
+        movl $(swapper_pg_dir - __PAGE_OFFSET), %edx
+        movl $0x007, %eax			
 1:
         leal 0x007(%edi),%ecx
-        movl %ecx,%edx
-        movl %ecx,page_pde_offset(%edx)
-        addl $4,%edx  
-        movl $1024,%ecx
-
+        movl %ecx,(%edx)
+        movl %ecx,PAGE_OFFSET_INDEX(%edx)
+        addl $4,%edx 
+        movl $1024, %ecx
         
 2:        
         stosl               /*stosl  --  EAX 寄存器的值存储到 ES:EDI 指向的内存地址，并根据方向标志（DF）自动调整 EDI 寄存器的值*/ 
-        addl $0x1000 , %eax
+        addl $0x1000,%eax
         loop 2b
-        leal (INIT_MAP_BEYOND_END + 0x007)(%edi),%ebp
+        leal (INIT_MAP_BEYOND_END+0x007)(%edi),%ebp
         cmpl %ebp,%eax
-        jb 1b        
-        
+        jb 1b   
+       
+
         xorl %ebx,%ebx				/* This is the boot CPU (BSP) */
 	    jmp 3f
 
 .global startup_smp
 startup_smp:
- 
-3:
-        /* load page table */
-        movl $(swapper_pg_dir - __PAGE_OFFSET) ,%eax
+
+3:       
+        /* load page table */ 
+        movl $swapper_pg_dir-__PAGE_OFFSET,%eax
         movl %eax,%cr3
         movl %cr0,%eax
-        orl 0x80000000,%eax
+        orl $0x80000000,%eax
         movl %eax,%cr0
 
-        movl $page_after,%eax
-        pushw $__KERNEL_CS
+        movl $page_after,%eax 
         pushl %eax
-        retf
+        ret
 
 page_after:
         
+        call _kernel_init
+        /* load GDT */  
+        lgdt _gdt_pointer
+        /* load IDT */
+        lidt _idt_pointer   
+
         movw $__KERNEL_DS,%ax
         movw %ax,%ds
         movw %ax,%es
         movw %ax,%fs
         movw %ax,%gs
         movw %ax,%ss
-        movl $stack_start,%esp 
-
-        call _kernel_init
-        /* load GDT */  
-        lgdt _gdt_pointer
-
-        /* load IDT */
-        lidt _idt_pointer  
+        movl $stack_start,%esp   
 
         movl $entry_kernel, %eax
-        pushw $0x08                     
+        pushw $__KERNEL_CS                     
 	    pushl %eax 
         retf
 
