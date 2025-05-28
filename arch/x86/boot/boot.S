@@ -5,6 +5,7 @@
 #include <arch/linkage.h>
 #include <arch/x86/thread_info.h>
 
+#define MB_SIZE  sizeof(multiboot_info_t)
 #define MB_FLAGS    MULTIBOOT_MEMORY_INFO | MULTIBOOT_PAGE_ALIGN
 /* 内存bitmap ,存放在  内核+PGD+PDE后*/
 #define INIT_MAP_BEYOND_END	(128*1024)
@@ -28,8 +29,14 @@
     start_: 
 
         movl $(stack_top-__PAGE_OFFSET) , %esp
-        /**/
+        /*拷贝multiboot参数 */
+        cld 
+        movl %ebx,%esi
+        movl $(multiboot_params-__PAGE_OFFSET),%edi
+        movl $MB_SIZE,%ecx
+        rep movsl   /*将 DS:ESI 指向的源双字数据，复制到 ES:EDI 指向的目标地址*/
         
+
         /* 初始化页表   */ 
         cld
         movl $(pg0 - __PAGE_OFFSET),%edi 
@@ -144,6 +151,10 @@ page_after:
     empty_zero_page:
         .fill 4096,1,0
 
+.section .bss.mb_params   
+    .global multiboot_params
+    multiboot_params:
+        .skip 4096,1,0
 
 
         

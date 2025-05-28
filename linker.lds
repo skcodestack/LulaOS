@@ -19,6 +19,7 @@ SECTIONS
     .bss BLOCK(4K): AT(ADDR(.bss) - 0xC0000000)
     {
         *(.bss.page_table)
+        *(.bss.mb_params)
         *(COMMON)
         *(.bss)  
         . = ALIGN(4096);
