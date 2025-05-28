@@ -6,5 +6,7 @@
         "gdt.h": "c",
         "vsprintf.h": "c",
         "linkage.h": "c",
+        "setup.h": "c",
+        "multiboot.h": "c"
     }
 }

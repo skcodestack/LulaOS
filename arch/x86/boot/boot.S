@@ -5,7 +5,6 @@
 #include <arch/linkage.h>
 #include <arch/x86/thread_info.h>
 
-#define MB_SIZE  sizeof(multiboot_info_t)
 #define MB_FLAGS    MULTIBOOT_MEMORY_INFO | MULTIBOOT_PAGE_ALIGN
 /* 内存bitmap ,存放在  内核+PGD+PDE后*/
 #define INIT_MAP_BEYOND_END	(128*1024)
@@ -33,10 +32,9 @@
         cld 
         movl %ebx,%esi
         movl $(multiboot_params-__PAGE_OFFSET),%edi
-        movl $MB_SIZE,%ecx
-        rep movsl   /*将 DS:ESI 指向的源双字数据，复制到 ES:EDI 指向的目标地址*/
+        movl (multi_boot_size - __PAGE_OFFSET),%ecx
+        rep movsb   /* movsl 将 DS:ESI 指向的源双字数据，复制到 ES:EDI 指向的目标地址*/
         
-
         /* 初始化页表   */ 
         cld
         movl $(pg0 - __PAGE_OFFSET),%edi 
@@ -56,7 +54,7 @@
         leal (INIT_MAP_BEYOND_END+0x007)(%edi),%ebp
         cmpl %ebp,%eax
         jb 1b   
-       
+        ; movl %edi,(init_pg_tables_end - __PAGE_OFFSET)
 
         xorl %ebx,%ebx				/* This is the boot CPU (BSP) */
 	    jmp 3f
@@ -66,7 +64,7 @@ startup_smp:
 
 3:       
         /* load page table */ 
-        movl $swapper_pg_dir-__PAGE_OFFSET,%eax
+        movl $(swapper_pg_dir-__PAGE_OFFSET),%eax
         movl %eax,%cr3
         movl %cr0,%eax
         orl $0x80000000,%eax
@@ -98,7 +96,7 @@ page_after:
         retf
 
     entry_kernel:
-        pushl %ebx   // push multiboot info addr 
+        pushl $multiboot_params   // push multiboot info addr 
         call _kernel_main
         cli
     
@@ -154,7 +152,7 @@ page_after:
 .section .bss.mb_params   
     .global multiboot_params
     multiboot_params:
-        .skip 4096,1,0
+        .fill 4096,1,0
 
 
         
