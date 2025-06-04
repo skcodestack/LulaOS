@@ -5,25 +5,84 @@ SECTIONS
     . = 0xC0000000 + 0x100000;
     .text BLOCK(4K): AT(ADDR(.text) - 0xC0000000)
     {   
+        _text = .;
         * (.multiboot)
-        * (.text)  
+        * (.text)
+        _etext = .; 
     }
+
+    .init.text BLOCK(4K): AT(ADDR(.init.text) - 0xC0000000)
+    {   
+        _init_text = .;
+        *(.text.init)
+        _einit_text = .;
+    }
+
+    .exit.text BLOCK(4K): AT(ADDR(.exit.text) - 0xC0000000)
+    {   
+        _exit_text = .;
+        *(.text.exit)
+        _eexit_text = .;
+    } 
+
+
+    .init.setup BLOCK(4K): AT(ADDR(.init.setup) - 0xC0000000)
+    {   
+        _init_setup = .;
+        *(.setup.init)
+        _einit_setup = .;
+    } 
+
+    .init.initcall BLOCK(4K): AT(ADDR(.init.initcall) - 0xC0000000)
+    {
+        _init_initcall = .;
+        *(.initcall.init)
+        _einit_initcall = .;
+    }
+    
+    .exit.exitcall BLOCK(4K): AT(ADDR(.exit.exitcall) - 0xC0000000)
+    {
+        _exit_exitcall = .;
+        *(.exitcall.exit)
+        _eexit_exitcall = .;
+    } 
+
+    .init.data BLOCK(4K): AT(ADDR(.init.data) - 0xC0000000)
+    {
+        _init_data = .;
+        *(.data.init)
+        _einit_data = .;
+    }
+
+    .exit.data BLOCK(4K): AT(ADDR(.exit.data) - 0xC0000000)
+    {
+        _exit_data = .;
+        *(.data.exit)
+        _eexit_data = .;
+    } 
+
     .data BLOCK(4K) : AT(ADDR(.data) - 0xC0000000)
     {			 
+        _data = .;
 	    *(.data) 
+        _edata = .;
 	} 
     .rodata BLOCK(4K): AT(ADDR(.rodata) - 0xC0000000)
     {
+        _rodata = .;
         *(.rodata)
+        _erodata = .;
     }
     .bss BLOCK(4K): AT(ADDR(.bss) - 0xC0000000)
     {
+        _bss = .;
         *(.bss.page_table)
         *(.bss.mb_params)
         *(COMMON)
         *(.bss)  
         . = ALIGN(4096);
         pg0 = .;
+        _end = .;
     }
-    
+    .end = .;
 }

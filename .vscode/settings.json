@@ -7,6 +7,12 @@
         "vsprintf.h": "c",
         "linkage.h": "c",
         "setup.h": "c",
-        "multiboot.h": "c"
+        "multiboot.h": "c",
+        "string.h": "c",
+        "bootmem.h": "c",
+        "pfh.h": "c",
+        "mb.h": "c",
+        "printk.h": "c",
+        "page.h": "c"
     }
 }

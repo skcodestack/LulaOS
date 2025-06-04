@@ -2,6 +2,10 @@
 #define __STRING_H__
 
 #include <stddef.h>
+#include <stdint.h>
 
 size_t strnlen(const char * s, size_t count);
+
+void * _memcpy(void *dest, const void *src, uint32_t n);
+
 #endif

@@ -28,13 +28,23 @@
     start_: 
 
         movl $(stack_top-__PAGE_OFFSET) , %esp
-        /*拷贝multiboot参数 */
+
+        
+        /*拷贝multiboot参数 */ 
         cld 
         movl %ebx,%esi
-        movl $(multiboot_params-__PAGE_OFFSET),%edi
+        movl $(multiboot_params-__PAGE_OFFSET),%edi 
         movl (multi_boot_size - __PAGE_OFFSET),%ecx
-        rep movsb   /* movsl 将 DS:ESI 指向的源双字数据，复制到 ES:EDI 指向的目标地址*/
+        shrl $2,%ecx
+        rep movsl   /* movsl 将 DS:ESI 指向的源双字数据，复制到 ES:EDI 指向的目标地址*/
         
+        movl (multi_boot_size - __PAGE_OFFSET),%ecx
+        andl $3,%ecx
+        jz .copy_end
+
+        rep movsb
+
+copy_end:
         /* 初始化页表   */ 
         cld
         movl $(pg0 - __PAGE_OFFSET),%edi 
@@ -54,7 +64,7 @@
         leal (INIT_MAP_BEYOND_END+0x007)(%edi),%ebp
         cmpl %ebp,%eax
         jb 1b   
-        ; movl %edi,(init_pg_tables_end - __PAGE_OFFSET)
+        movl %edi,(init_pg_tables_end - __PAGE_OFFSET)
 
         xorl %ebx,%ebx				/* This is the boot CPU (BSP) */
 	    jmp 3f
@@ -96,7 +106,7 @@ page_after:
         retf
 
     entry_kernel:
-        pushl $multiboot_params   // push multiboot info addr 
+        /*pushl $multiboot_params   // push multiboot info addr*/ 
         call _kernel_main
         cli
     
