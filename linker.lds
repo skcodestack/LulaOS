@@ -77,6 +77,7 @@ SECTIONS
     {
         _bss = .;
         *(.bss.page_table)
+        . = ALIGN(4096);
         *(.bss.mb_params)
         *(COMMON)
         *(.bss)  

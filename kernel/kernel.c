@@ -16,9 +16,8 @@ void _kernel_init()
 
 asmlinkage _kernel_main()
 {  
-    printk("Hello World!\nThis is LulaOS");
-    printk("Multiboot info table: %d\n", multiboot_params->mem_lower);
-
+    printk("Hello World!\nThis is LulaOS\n");
+    
     setup_arch();
 
     

@@ -8,12 +8,7 @@
 unsigned int multi_boot_size = sizeof(multiboot_info_t);
 
 unsigned long init_pg_tables_end = ~0UL;
-
-void __init setup_arch(){
-    unsigned long max_low_pfn;
-
-    max_low_pfn = setup_memery();
-}
+multiboot_info_t * multiboot_params;
 
 /**
  * setup memery info 
@@ -25,5 +20,12 @@ static __init unsigned long setup_memery(){
     find_max_pfn();
     
      
-
+    return 0;
 }
+
+void __init setup_arch(){
+    unsigned long max_low_pfn;
+
+    max_low_pfn = setup_memery();
+}
+

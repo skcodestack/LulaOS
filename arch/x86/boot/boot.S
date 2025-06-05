@@ -5,10 +5,10 @@
 #include <arch/linkage.h>
 #include <arch/x86/thread_info.h>
 
-#define MB_FLAGS    MULTIBOOT_MEMORY_INFO | MULTIBOOT_PAGE_ALIGN
+#define MB_FLAGS    (MULTIBOOT_MEMORY_INFO | MULTIBOOT_PAGE_ALIGN)
 /* 内存bitmap ,存放在  内核+PGD+PDE后*/
 #define INIT_MAP_BEYOND_END	(128*1024)
-#define PAGE_OFFSET_INDEX (__PAGE_OFFSET >> 20) /* page table index*/
+#define PAGE_OFFSET_INDEX (__PAGE_OFFSET >> 20) /* page table index */
 
 .section .multiboot
     .long MULTIBOOT_MAGIC
@@ -29,20 +29,22 @@
 
         movl $(stack_top-__PAGE_OFFSET) , %esp
 
-        
         /*拷贝multiboot参数 */ 
-        cld 
+        /*cld 
         movl %ebx,%esi
         movl $(multiboot_params-__PAGE_OFFSET),%edi 
-        movl (multi_boot_size - __PAGE_OFFSET),%ecx
+        movl 4096,%ecx
         shrl $2,%ecx
-        rep movsl   /* movsl 将 DS:ESI 指向的源双字数据，复制到 ES:EDI 指向的目标地址*/
+        rep movsl   / movsl 将 DS:ESI 指向的源双字数据，复制到 ES:EDI 指向的目标地址 /
         
-        movl (multi_boot_size - __PAGE_OFFSET),%ecx
+        movl $(multi_boot_size-__PAGE_OFFSET),%ecx
         andl $3,%ecx
-        jz .copy_end
-
-        rep movsb
+        jz copy_end 
+        rep movsb 
+        */
+        movl $(multiboot_params-__PAGE_OFFSET),%edi
+        movl %ebx,(%edi)
+ 
 
 copy_end:
         /* 初始化页表   */ 
@@ -160,8 +162,8 @@ page_after:
         .fill 4096,1,0
 
 .section .bss.mb_params   
-    .global multiboot_params
-    multiboot_params:
+    .global temp_multiboot_params
+    temp_multiboot_params:
         .fill 4096,1,0
 
 

@@ -9,7 +9,7 @@
 #define PAGE_MASK (~(PAGE_SIZE - 1))
 #define PAGE_ALIGN(addr) (((addr) + PAGE_SIZE - 1) & PAGE_MASK)
 
- 
+#ifndef __ASM__ 
 typedef struct { unsigned long pgd; } pgd_t;
 typedef struct { unsigned long pte_low; } pte_t; 
 typedef struct { unsigned long pgprot; } pgprot_t;
@@ -21,7 +21,7 @@ typedef struct { unsigned long pgprot; } pgprot_t;
 #define __pa(vaddr) ((unsigned long)(vaddr) - PAGE_OFFSET)
 #define __va(paddr) ((void *)((unsigned long)(paddr) + PAGE_OFFSET))
 
-
+#endif
 
 
 #endif
