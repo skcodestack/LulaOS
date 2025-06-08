@@ -26,4 +26,15 @@ void *_memcpy(void *dest, const void *src, uint32_t n)
 
 	return dest;
 }
+
+void * _memset(void *s, char c, uint32_t count){
+	int d0, d1;
+	__asm__ __volatile__(
+		"rep ; stosb\n\t"    /// al write to es:edi
+		: "=&c"(d0), "=&D"(d1)
+		: "a"((unsigned char)c), "1"((long)s), "0"(count)
+		: "memory");
+
+	return s;
+} 
  

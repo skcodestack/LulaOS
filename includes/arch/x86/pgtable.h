@@ -56,16 +56,18 @@ extern unsigned long pg0[];
 #define PAGE_COPY __pgprot(_PAGE_PRESENT | _PAGE_USER | _PAGE_ACCESSED)
 #define PAGE_READONLY __pgprot(_PAGE_PRESENT | _PAGE_USER | _PAGE_ACCESSED)
 
-#define _PAGE_KERNEL __pgprot(_PAGE_PRESENT | _PAGE_RW | _PAGE_DIRTY | _PAGE_ACCESSED)
-#define _PAGE_KERNEL_RO  (_PAGE_KERNEL & ~_PAGE_RW)
-#define _PAGE_KERNEL_NOCACHE (_PAGE_KERNEL | _PAGE_PCD)
+#define PAGE_KERNEL __pgprot(_PAGE_PRESENT | _PAGE_RW | _PAGE_DIRTY | _PAGE_ACCESSED)
+#define PAGE_KERNEL_RO  (PAGE_KERNEL & ~_PAGE_RW)
+#define PAGE_KERNEL_NOCACHE (PAGE_KERNEL | _PAGE_PCD)
 
-#define PAGE_KERNEL		__pgprot(_PAGE_KERNEL)
-#define PAGE_KERNEL_RO		__pgprot(_PAGE_KERNEL_RO) 
-#define PAGE_KERNEL_NOCACHE	__pgprot(_PAGE_KERNEL_NOCACHE) 
+ 
+#define pte_present(x) ((x).pte_low & _PAGE_PRESENT) 
+#define pte_clear(xp)	do { set_pte(xp, __pte(0)); } while (0)
 
-#define pte_present(x) ((x).pte_low & _PAGE_PRESENT)
-
+#define pgd_none(x)	(!pgd_val(x))
+#define pgd_present(x)	(pgd_val(x) & _PAGE_PRESENT)
+#define pgd_clear(xp)	do { set_pgd(xp, __pgd(0)); } while (0)
+#define	pgd_bad(x)	((pgd_val(x) & (~PAGE_MASK & ~_PAGE_USER)) != _KERNPG_TABLE)
  
 static inline int pte_user(pte_t pte)		{ return (pte).pte_low & _PAGE_USER; }
 static inline int pte_read(pte_t pte)		{ return (pte).pte_low & _PAGE_USER; }
@@ -87,9 +89,21 @@ static inline pte_t pte_mkwrite(pte_t pte)	{ (pte).pte_low |= _PAGE_RW; return p
 
 
 // #define mk_pte(page, pgprot)	pfn_pte(page_to_pfn(page), (pgprot))
-
 #define pgd_index(address) (((address) >> PGDIR_SHIFT) & (PTRS_PER_PGD-1))
 #define pte_index(address) \
 		(((address) >> PAGE_SHIFT) & (PTRS_PER_PTE - 1))
+
+
+#define pgd_page(pgd) \
+((unsigned long) __va(pgd_val(pgd) & PAGE_MASK))
+
+/// mm is the mm_struct
+#define pgd_offset(mm, address) ((mm)->pgd+pgd_index(address))
+
+#define pte_offset(dir, address) ((pte_t *) pgd_page(*(dir)) + \
+			pte_index(address))
+
+
+#define mk_pte_phys(physpage, pgprot)	__mk_pte((physpage) >> PAGE_SHIFT, pgprot)
 
 #endif

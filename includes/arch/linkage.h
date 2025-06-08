@@ -5,6 +5,7 @@
 
 #define asmlinkage __attribute__((regparm(0))) //not use register
 #define __cache_aligned_  __attribute__((__aligned__(L1_CACHE_LINE_SIZE))) 
+#define __inline__ inline
 
 #define __init		__attribute__ ((__section__ (".text.init")))
 #define __exit		__attribute__ ((unused, __section__(".text.exit")))

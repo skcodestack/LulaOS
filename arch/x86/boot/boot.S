@@ -42,7 +42,7 @@
         jz copy_end 
         rep movsb 
         */
-        movl $(multiboot_params-__PAGE_OFFSET),%edi
+        movl $(multiboot_params_addr-__PAGE_OFFSET),%edi
         movl %ebx,(%edi)
  
 

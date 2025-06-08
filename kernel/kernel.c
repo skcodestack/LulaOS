@@ -10,8 +10,6 @@
 void _kernel_init()
 {
     _init_gdt();
-    _init_idt();
-    _init_interrupts();
 }
 
 asmlinkage _kernel_main()
@@ -20,7 +18,10 @@ asmlinkage _kernel_main()
     
     setup_arch();
 
-    
+    _init_idt();
+    _init_interrupts();
 
+    //sched_init,softirq_init,kmem_cache_init
 
+    mm_init();
 }

@@ -12,6 +12,10 @@ uint32_t TTY_COLOUMN = 0;
 uint32_t TTY_ROW = 0;
 
 
+void tty_set_buffer_base(unsigned long base){
+    vga_buffer = (vga_attribute *)(0xB8000 + base);
+}
+
 void tty_set_theme(vga_attribute fg, vga_attribute bg)
 {
     theme_color = (bg << 4 | fg) << 8;

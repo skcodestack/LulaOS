@@ -13,6 +13,14 @@
         "pfh.h": "c",
         "mb.h": "c",
         "printk.h": "c",
-        "page.h": "c"
+        "page.h": "c",
+        "mmzone.h": "c",
+        "memcpy.h": "c",
+        "pgtable.h": "c",
+        "stddef.h": "c",
+        "bitops.h": "c",
+        "highmem.h": "c",
+        "mm.h": "c",
+        "system.h": "c"
     }
 }

@@ -22,3 +22,4 @@ void tty_put_char(char c);
 void tty_put_string(char *str);
 void tty_scroll_up();
 void tty_clear();
+void tty_set_buffer_base(unsigned long base);

@@ -12,7 +12,6 @@ void _set_gdt_entry(uint32_t index,uint32_t base, uint32_t limit, uint32_t acces
  
 void _init_gdt()
 {
-
     //mov init to boot.S
     _set_gdt_entry(0,0, 0, 0);
     _set_gdt_entry(1,0, 0x000FFFFF, SEG_CODE_PL0);
