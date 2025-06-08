@@ -5,6 +5,7 @@
 #include <arch/x86/atomic.h>
 
 
+
 typedef struct page {
 	struct list_head list;		/* 下一页 */   
 	atomic_t count;			/*引用  */
@@ -13,6 +14,43 @@ typedef struct page {
 	void *virtual;			/*  内核映射地址  DMA  NORMAL,如果为null，那么肯定是higmem */
 	struct zone_struct *zone;	/* 管理区 */
 } mem_map_t;
+
+#define PG_locked		 0	 
+#define PG_error		 1
+#define PG_referenced	 2
+#define PG_uptodate		 3
+#define PG_dirty		 4
+#define PG_unused		 5
+#define PG_lru			 6
+#define PG_active		 7
+#define PG_slab			 8
+#define PG_skip			10
+#define PG_highmem		11   
+#define PG_checked		12	 
+#define PG_arch_1		13
+#define PG_reserved		14   
+#define PG_launder		15	 
+
+// #define UnlockPage(page)	unlock_page(page)
+// #define Page_Uptodate(page)	test_bit(PG_uptodate, &(page)->flags)
+// #define SetPageUptodate(page)	set_bit(PG_uptodate, &(page)->flags)
+// #define ClearPageUptodate(page)	clear_bit(PG_uptodate, &(page)->flags)
+// #define PageDirty(page)		test_bit(PG_dirty, &(page)->flags)
+// #define SetPageDirty(page)	set_bit(PG_dirty, &(page)->flags)
+// #define ClearPageDirty(page)	clear_bit(PG_dirty, &(page)->flags)
+// #define PageLocked(page)	test_bit(PG_locked, &(page)->flags)
+// #define LockPage(page)		set_bit(PG_locked, &(page)->flags)
+// #define TryLockPage(page)	test_and_set_bit(PG_locked, &(page)->flags)
+// #define PageChecked(page)	test_bit(PG_checked, &(page)->flags)
+// #define SetPageChecked(page)	set_bit(PG_checked, &(page)->flags)
+// #define PageLaunder(page)	test_bit(PG_launder, &(page)->flags)
+// #define SetPageLaunder(page)	set_bit(PG_launder, &(page)->flags)
+
+
+#define set_page_count(p,v) 	atomic_set(&(p)->count, v)
+
+#define SetPageReserved(page)		set_bit(PG_reserved, &(page)->flags)
+#define ClearPageReserved(page)		clear_bit(PG_reserved, &(page)->flags)
 
 //page array
 extern mem_map_t * mem_map;
