@@ -3,6 +3,7 @@
 #include <arch/linkage.h>
 #include <libs/list.h>
 #include <arch/x86/atomic.h>
+#include <arch/x86/bitops.h>
 
 
 

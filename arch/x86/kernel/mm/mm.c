@@ -4,6 +4,7 @@
 #include <arch/x86/pgtable.h>
 #include <arch/x86/highmem.h>
 #include <mm/mmzone.h>
+#include <printk.h>
 
 
 mem_map_t * mem_map;
@@ -17,33 +18,32 @@ struct list_head active_list;
  */
 static void __init direct_area_init(void)
 {
-    unsigned long vaddr;
-    unsigned long end = __va(PFN_PHYS(max_low_pfn)); // 896M virtual address
+    unsigned long start_pfn = 0;
+    unsigned long end = max_low_pfn; // 896M virtual address
     pgd_t *pgd_base = swapper_pg_dir;
 
     int i = pgd_index(PAGE_OFFSET); // PAGE_OFFSET index on the pgd table
     pgd_t *pgd = pgd_base + i;      // PAGE_OFFSET item on the pgd table
-
+    
     for (; i < PTRS_PER_PGD; pgd++, i++)
     {
-        vaddr = i * PGDIR_SIZE;
-        if (end && vaddr >= end)
+ 
+        if (end && start_pfn >= end)
         {
             break;
         }
-        pte_t *pte = (pte_t *)alloc_bootmem_low_pages(PAGE_SIZE);
-        pte_t *pte_base = pte;
-        for (int j = 0; j < PTRS_PER_PTE; pte++, i++)
+        pte_t *pte = (pte_t *)alloc_bootmem_low_pages(PAGE_SIZE); 
+        pte_t *pte_base = pte; 
+        for (int j = 0; j < PTRS_PER_PTE;  start_pfn++,pte++, j++)
         {
-            vaddr = i * PGDIR_SIZE + j * PAGE_SIZE;
-            if (end && (vaddr >= end))
+             
+            if (end && (start_pfn >= end))
             {
                 break;
-            }
-            set_pte(pte, __mk_pte(PFN_DOWN(__pa(vaddr)), PAGE_KERNEL)); // set pte item
-        }
-
-        set_pgd(pgd, __pgd(__pa(pte_base) + _KERNPG_TABLE)); // set pdt item
+            }  
+            set_pte(pte, __mk_pte(start_pfn, PAGE_KERNEL)); // set pte item 
+        } 
+        set_pgd(pgd, __pgd(__pa(pte_base) + _KERNPG_TABLE)); // set pdt item 
     }
 }
 
@@ -119,7 +119,7 @@ void __init paging_init()
     persist_area_init();
     
     /// 4.load pgt
-    load_cr3(__pa(swapper_pg_dir));
+    load_cr3(swapper_pg_dir); 
 
     /// 5.fixed kmap init
     fixed_kmap_init();

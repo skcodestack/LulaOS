@@ -70,6 +70,7 @@ void __init reserve_bootmem(unsigned long addr, unsigned long size){
     {
         test_and_set_bit(i,bdata->node_bootmem_map);
     }  
+ 
 }
 
 /**

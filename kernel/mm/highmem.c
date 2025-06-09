@@ -1,4 +1,4 @@
-#include <highmem.h>
+#include <arch/x86/highmem.h>
 #include <arch/x86/pgtable.h>
 #include <arch/x86/page.h>
 #include <printk.h>

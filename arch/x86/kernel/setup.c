@@ -6,7 +6,7 @@
 #include <printk.h> 
 #include <mm/mm.h>
 #include <libs/memcpy.h>
-#include <arch/x86/highmem.h>
+#include <arch/x86/highmem.h> 
 
 unsigned long init_pg_tables_end = ~0UL;
 multiboot_info_t * multiboot_params_addr;
@@ -72,7 +72,7 @@ unsigned long __init find_max_pfn(){
     for (unsigned int i = 0; i < size; i++)
     {   
         multiboot_memory_map_t* entry =  (multiboot_memory_map_t *)(mmap+i);
-        printk("Start Address: %x, Length: %d M , Size: %x , Type: %d\n",entry->addr_low,entry->len_low >> 10,entry->size,entry->type);
+        printk("Start Address: %x, Length: %d KB , Size: %x , Type: %d\n",entry->addr_low,entry->len_low >> 10,entry->size,entry->type);
         if(entry->type != MULTIBOOT_MEMORY_AVAILABLE){
             continue;
         }
@@ -104,20 +104,20 @@ void __init setup_bootmem_allocator(){
         multiboot_memory_map_t* entry =  (multiboot_memory_map_t *)(mmap+i); 
         if(entry->type != MULTIBOOT_MEMORY_AVAILABLE){
             continue;
-        }
+        } 
         unsigned long start = PFN_UP(entry->addr_low);
         if(start > max_low_pfn){
             continue;
         }
-        unsigned long end = PFN_DOWN(entry->addr_low + entry->len_low);
+        unsigned long end = PFN_DOWN(entry->addr_low + entry->len_low); 
         if(end > max_low_pfn){
             end = max_low_pfn;
         } 
-        if(start <= end){
+        if(start >= end){
             continue;
         }
         int size = end - start;
-        //setting useable
+        //setting useable 
         free_bootmem(PFN_PHYS(start),PFN_PHYS(size));
     }
 
@@ -143,9 +143,7 @@ void __init setup_bootmem_allocator(){
         -----------------------------------------------------------
         (1M+内核大小+bootmem大小)- 896M   |        可分配
 	    -------------------------------------------------------------
-    */
-
-
+    */ 
 }
 
 

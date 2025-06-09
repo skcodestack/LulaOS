@@ -24,4 +24,6 @@ asmlinkage _kernel_main()
     //sched_init,softirq_init,kmem_cache_init
 
     mm_init();
+
+    printk("Finished\n");
 }

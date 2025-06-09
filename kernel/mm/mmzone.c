@@ -71,7 +71,7 @@ void __init zone_init()
         total_pages += zone_size[i];
     }
 
-    printk("total pages: %d\n",total_pages);
+    printk("total pages: %d,total size:%dM \n",total_pages ,(total_pages * 4) >> 10  );
 
     INIT_LIST_HEAD(&active_list);
     INIT_LIST_HEAD(&inactive_list);
@@ -137,9 +137,8 @@ void __init zone_init()
             unsigned long bitmap_size = (size-1) >> (i+4);//需要的字节
 			bitmap_size = LONG_ALIGN(bitmap_size+1);
 			zone->free_area[i].map = 
-			  (unsigned long *) alloc_bootmem_node(pgdat, bitmap_size);
-        }
-        
+			  (unsigned long *) __alloc_bootmem(bitmap_size,PAGE_SIZE,0);
+        } 
     }
     
     build_zonelists(pgdat);
