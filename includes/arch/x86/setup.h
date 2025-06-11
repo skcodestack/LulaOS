@@ -14,6 +14,6 @@ extern char multiboot_params[4096];
 extern multiboot_info_t * multiboot_info_base;
 
 void __init setup_arch();
-
+static inline int page_is_ram(unsigned long pagenr);
 
 #endif

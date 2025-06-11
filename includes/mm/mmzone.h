@@ -2,6 +2,9 @@
 #define __MMZONE_H__
 #include <mm/bootmem.h>
 #include <mm/mm.h>
+#include <arch/x86/spinlock.h>
+
+#define BAD_RANGE(zone,x) (((zone) != (x)->zone) || (((x)-mem_map) < (zone)->zone_start_mapnr) || (((x)-mem_map) >= (zone)->zone_start_mapnr+(zone)->size))
 
 #define LONG_ALIGN(x) (((x)+(sizeof(long))-1)&~((sizeof(long))-1))
 
@@ -30,7 +33,7 @@ typedef struct free_area_struct {
  * ZONE_HIGHMEM  > 896M
  */ 
 typedef struct zone_struct {
-    
+    spinlock_t		lock; //用于保证对结构中其他域的访问
 	unsigned long	free_pages;//区中现有空闲的个数  
 	free_area_t		free_area[MAX_ORDER];//伙伴分配系统中位图数组和页面链表,1，2，3，4.... 2的MAX_ORDER次方 
 	struct pglist_data	*zone_pgdat; //本管理区所在的存储节点 
@@ -69,5 +72,8 @@ extern pg_data_t contig_page_data;
 #define MAP_ALIGN(x)	((((x) % sizeof(mem_map_t)) == 0) ? (x) : ((x) + \
 		sizeof(mem_map_t) - ((x) % sizeof(mem_map_t))))
 
-void __init zone_init();
+#define __free_page(p) (__free_pages(p, 0))
+
+void __init zone_init(); 
+void __free_pages(struct page *page, unsigned int order);
 #endif

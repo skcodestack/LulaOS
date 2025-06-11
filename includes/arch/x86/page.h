@@ -1,5 +1,6 @@
 #ifndef __PAGE_H__
 #define __PAGE_H__
+#include <mm/mm.h>
 
 /** page base info */
 #define __PAGE_OFFSET 0xC0000000
@@ -38,6 +39,7 @@ typedef struct { unsigned long pgprot; } pgprot_t;
 /** address op */
 #define __pa(vaddr) ((unsigned long)(vaddr) - PAGE_OFFSET)
 #define __va(paddr) ((void *)((unsigned long)(paddr) + PAGE_OFFSET))
+#define virt_to_page(kaddr)	(mem_map + (__pa(kaddr) >> PAGE_SHIFT))
 
 #endif
 

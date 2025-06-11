@@ -55,4 +55,15 @@ static __inline__ void clear_bit(int nr, volatile void * addr)
 		:"Ir" (nr));
 }
 
+static __inline__ int __test_and_change_bit(int nr, volatile void * addr)
+{
+	int oldbit;
+
+	__asm__ __volatile__(
+		"btcl %2,%1\n\tsbbl %0,%0"
+		:"=r" (oldbit),"=m" (ADDR(addr))
+		:"Ir" (nr) : "memory");
+	return oldbit;
+}
+
 #endif

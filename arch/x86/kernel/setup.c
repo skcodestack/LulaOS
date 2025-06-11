@@ -32,6 +32,31 @@ static __init void copy_multiboot_info(){
 
 } 
 
+
+/**
+ *  page is need ram 
+ */
+static inline int page_is_ram(unsigned long pagenr){
+ 
+    unsigned int size = multiboot_info_base->mmap_length / sizeof(multiboot_memory_map_t);
+    multiboot_memory_map_t * mmap =   (multiboot_memory_map_t *)multiboot_info_base->mmap_addr;
+     
+    for (unsigned int i = 0; i < size; i++)
+    {   
+        multiboot_memory_map_t* entry =  (multiboot_memory_map_t *)(mmap+i); 
+        if(entry->type != MULTIBOOT_MEMORY_AVAILABLE){
+            continue;
+        }
+        unsigned long start = PFN_UP(entry->addr_low);
+        unsigned long end = PFN_DOWN(entry->addr_low + entry->len_low);
+        if(pagenr >= start && pagenr < end){
+            return 1;
+        }
+    }
+    return 0;
+}
+
+
 /**
  * search phy mem max low pfn 
  */

@@ -14,6 +14,7 @@ extern unsigned long pg0[];
 #define PGDIR_SHIFT 22
 #define PGDIR_SIZE (1UL << PGDIR_SHIFT)
 #define PGDIR_MASK (~(PGDIR_SIZE - 1))
+#define USER_PTRS_PER_PGD (PAGE_OFFSET >> PGDIR_SHIFT)
 
 #define PTRS_PER_PGD	1024
 #define PTRS_PER_PTE	1024

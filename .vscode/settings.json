@@ -21,6 +21,8 @@
         "bitops.h": "c",
         "highmem.h": "c",
         "mm.h": "c",
-        "system.h": "c"
+        "system.h": "c",
+        "atomic.h": "c",
+        "spinlock.h": "c"
     }
 }
