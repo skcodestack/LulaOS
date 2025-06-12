@@ -2,8 +2,8 @@
 #define __ASM_SPINLOCK_H
  
  #include <arch/x86/rwlock.h>
- #include <arch/x86/atomic.h>
- 
+ #include <arch/x86/atomic.h> 
+#include <arch/x86/system.h>
 typedef struct {
 	volatile unsigned int lock;
 } spinlock_t;
@@ -17,7 +17,10 @@ typedef struct {
 #define spin_is_locked(x)	(*(volatile char *)(&(x)->lock) <= 0)
  
 #define spin_unlock_wait(x)	do { barrier(); } while(spin_is_locked(x))
-
+ 
+#define read_unlock(rw)		asm volatile(read_unlock_string)
+ 
+#define write_unlock(rw)	asm volatile(write_unlock_string)
 
 /*
   lock
@@ -35,12 +38,7 @@ typedef struct {
 	".previous"
 
  
-/*
-   unlock
-*/
-#define spin_unlock_string \
-	"movb $1,%0" \
-		:"=m" (lock->lock) : : "memory"
+ 
 
 
 #define read_unlock_string \
@@ -51,12 +49,17 @@ typedef struct {
 	"lock ; addl $" RW_LOCK_BIAS_STR \
 		",%0":"=m" ((rw)->lock) : : "memory"
  
-static inline void spin_unlock(spinlock_t *lock)
-{ 
-	__asm__ __volatile__(
-		spin_unlock_string
-	);
-}
+// #define spin_unlock_string \
+// 	"movb $1,%0" \
+// 		:"=m" (lock->lock) : : "memory"
+
+
+// static inline void spin_unlock(spinlock_t *lock)
+// { 
+// 	__asm__ __volatile__(
+// 		spin_unlock_string
+// 	);
+// }
  
 
  
@@ -115,12 +118,6 @@ static inline void write_lock(rwlock_t *rw)
 { 
 	__build_write_lock(rw, "__write_lock_failed");
 }
-
-#include <arch/x86/system.h>
- 
-#define read_unlock(rw)		asm volatile(read_unlock_string)
- 
-#define write_unlock(rw)	asm volatile(write_unlock_string)
 
  
 static inline int write_trylock(rwlock_t *lock)
