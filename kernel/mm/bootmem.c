@@ -196,7 +196,7 @@ unsigned long __init free_all_bootmem()
     bootmem_data_t * bdata = contig_page_data.bdata;
     struct page*  page = contig_page_data.node_mem_map;
     
-    unsigned long usablePageCount = 0;
+    unsigned long usablePageCount = 0; 
     unsigned long pfn_count = bdata->node_low_pfn - PFN_DOWN(bdata->node_boot_start);
     /// 1.循环遍历0->896M，如果位是0表示可以分配，把page的count设置1，再调用free_page,添加到空闲链表
     for (unsigned long i = 0; i < pfn_count; page++, i++)

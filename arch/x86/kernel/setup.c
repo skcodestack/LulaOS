@@ -26,24 +26,26 @@ static __init void copy_multiboot_info(){
 
     multiboot_memory_map_t * mmap =   (multiboot_memory_map_t *)multiboot_params_addr->mmap_addr;
     unsigned long mmap_size =  multiboot_params_addr->mmap_length;
-    memcpy(dest,mmap,mmap_size);
-    multiboot_params_addr->mmap_addr = (unsigned long)dest;
-    dest+= mmap_size; 
+    memcpy(dest,mmap,mmap_size); 
+    
 
+    multiboot_info_t *  base =  multiboot_params;
+    base->mmap_addr = (void *)dest;
+
+    dest+= mmap_size;
 } 
 
 
 /**
  *  page is need ram 
  */
-static inline int page_is_ram(unsigned long pagenr){
- 
+int __init page_is_ram(unsigned long pagenr){
+  
     unsigned int size = multiboot_info_base->mmap_length / sizeof(multiboot_memory_map_t);
     multiboot_memory_map_t * mmap =   (multiboot_memory_map_t *)multiboot_info_base->mmap_addr;
-     
     for (unsigned int i = 0; i < size; i++)
     {   
-        multiboot_memory_map_t* entry =  (multiboot_memory_map_t *)(mmap+i); 
+        multiboot_memory_map_t* entry =  (multiboot_memory_map_t *)(mmap+i);
         if(entry->type != MULTIBOOT_MEMORY_AVAILABLE){
             continue;
         }
@@ -54,7 +56,7 @@ static inline int page_is_ram(unsigned long pagenr){
         }
     }
     return 0;
-}
+} 
 
 
 /**
@@ -79,7 +81,6 @@ unsigned long __init find_max_low_pfn(){
         highstart_pfn = MAXMEM_PFN;
     }
     printk("hight mem available size: %d M\n",((highend_pfn - highstart_pfn)>>(20-PAGE_SHIFT))); 
-
     return max_low_pfn;
 }
 

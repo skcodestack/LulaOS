@@ -108,6 +108,7 @@ void __init zone_init()
         zone->name = zone_names[i];
         zone->zone_pgdat = pgdat;
         zone->free_pages = 0;
+        zone->lock = SPIN_LOCK_UNLOCKED;
         if (!size)
         {
             continue;
@@ -151,8 +152,7 @@ void __init zone_init()
 /// 回收page
 static void __free_pages_ok(struct page *page, unsigned int order)
 {
-    unsigned long flag;
-
+    unsigned long flag; 
     if (PageLocked(page)) // 加锁
         return;
     if (PageLRU(page)) // 存在activit_list 和 inactivity_list
@@ -174,13 +174,11 @@ static void __free_pages_ok(struct page *page, unsigned int order)
     if (page_idx & ~mask)
     {
         return;
-    }
-
+    } 
     unsigned long index = page_idx >> (1 + order); // 伙伴块位图的索引
     free_area_t *area = zone->free_area + order;
 
-    spin_lock_irqsave(&zone->lock, flag);
-
+    spin_lock_irqsave(&zone->lock, flag); 
     zone->free_pages -= mask; /// 更新空闲页计数
 
     // 尝试与伙伴块合并(循环直到无法合并或达到最大阶)
@@ -222,20 +220,23 @@ static void __free_pages_ok(struct page *page, unsigned int order)
 
 void __free_pages(struct page *page, unsigned int order)
 {
-    // 不是 reserved  且 count 为1
+ 
     /***
-    其中比较巧妙的部分就是调用put_page_testzero()宏，该函数把页面的引用计数减1，
-    如果减1 后引用计数为0，则该函数返回1。因此，如果调用者不是该页面的最后一个用户，
-    那么，这个页面实际上就不会被释放。另外要说明的是不可释放保留页PageReserved，这是
-    通过PageReserved（）宏进行检查的
+            其中比较巧妙的部分就是调用put_page_testzero()宏，该函数把页面的引用计数减1，
+            如果减1 后引用计数为0，则该函数返回1。因此，如果调用者不是该页面的最后一个用户，
+            那么，这个页面实际上就不会被释放。另外要说明的是不可释放保留页PageReserved，这是
+            通过PageReserved（）宏进行检查的
 
-    如果调用者是该页面的最后一个用户，则__free_pages() 再调用 __free_pages_ok()。
-__free_pages_ok（）才是对页面块进行释放的实际函数，该函数把释放的页面块链入空闲链
-表，并对伙伴系统的位图进行管理，必要时合并伙伴块。这实际上是expand()函数的反操作
+            如果调用者是该页面的最后一个用户，则__free_pages() 再调用 __free_pages_ok()。
+        __free_pages_ok（）才是对页面块进行释放的实际函数，该函数把释放的页面块链入空闲链
+        表，并对伙伴系统的位图进行管理，必要时合并伙伴块。这实际上是expand()函数的反操作
 
-    */
-    if (!PageReserved(page) && put_page_testzero(page))
+    */ 
+    ///不是 reserved  且 count 为1
+    if (!PageReserved(page) && put_page_testzero(page)){
         __free_pages_ok(page, order);
+    }
+       
 }
 
 void free_pages(unsigned long addr, unsigned int order)

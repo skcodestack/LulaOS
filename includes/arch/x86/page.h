@@ -1,6 +1,5 @@
 #ifndef __PAGE_H__
 #define __PAGE_H__
-#include <mm/mm.h>
 
 /** page base info */
 #define __PAGE_OFFSET 0xC0000000
@@ -11,7 +10,8 @@
 #define PAGE_MASK (~(PAGE_SIZE - 1))
 #define PAGE_ALIGN(addr) (((addr) + PAGE_SIZE - 1) & PAGE_MASK)
 
-#ifndef __ASM__ 
+#ifndef __ASM__  
+#include <mm/mm.h>
 /** page frame number */
 #define PFN_ALIGN(x)	(((unsigned long)(x) + (PAGE_SIZE - 1)) & PAGE_MASK)
 #define PFN_UP(x)	(((x) + PAGE_SIZE-1) >> PAGE_SHIFT)

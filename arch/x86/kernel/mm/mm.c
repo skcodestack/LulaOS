@@ -115,10 +115,9 @@ static void __init persist_area_init()
 
  */
 void __init paging_init()
-{
-
+{  
     /// 1. map direct area 0M-896M
-    direct_area_init();
+    direct_area_init(); 
     /// 2. fix area n*4K - 4G
     fix_area_init();
     /// 3.persist map area 4G-8M
@@ -150,24 +149,28 @@ void __init mm_init(void)
         printk("mem map not init\n");
         return;
     }
+    unsigned long totalUsablePages = 0;
+    unsigned long reservedpages = 0;
     struct page *highmem_start_page = mem_map + highstart_pfn; // 896M page
     max_mapnr = highend_pfn;                                   // 最大页号，比如4G
 
     /// 1. 将低端内存添加伙伴系统
     /// 2. 回收清除启动内存分配器 bootmem alloc
-    high_memory = _va(PFN_PHYS(max_low_pfn)); // 896M vaddr
+    high_memory = __va(PFN_PHYS(max_low_pfn)); // 896M vaddr
 
-    memset(empty_zero_page, 0, PAGE_SIZE);
-    unsigned long totalUsablePages = free_all_bootmem();
-
-    unsigned long reservedpages = 0;
+    memset(empty_zero_page, 0, PAGE_SIZE); 
+    //0-896M
+    totalUsablePages = free_all_bootmem(); 
+  
     for (unsigned long tmp = 0; tmp < max_low_pfn; tmp++)
     {
         // 统计所保留的页面数
-        if (page_is_ram(tmp) && PageReserved(mem_map + tmp))
+        if (page_is_ram(tmp) && PageReserved(mem_map + tmp)){
             reservedpages++;
+        }
     } 
     /// 3. 高端内存添加到伙伴系统 896M - 4G
+    unsigned long highUsablePages = 0;
     for (unsigned long tmp = highstart_pfn; tmp < highend_pfn; tmp++)
     {
         struct page *page = mem_map + tmp;
@@ -182,20 +185,20 @@ void __init mm_init(void)
         set_bit(PG_highmem, &page->flags);
         atomic_set(&page->count, 1);
         __free_page(page); // 添加到伙伴管理器
-        totalUsablePages++;
+        highUsablePages++;
     }
+    totalUsablePages +=highUsablePages;
 
-
-    // 计算内核各个部分的大小
+    /// 计算内核各个部分的大小
     unsigned long codesize = (unsigned long)&_etext - (unsigned long)&_text;
     unsigned long  datasize = (unsigned long)&_edata - (unsigned long)&_etext; 
-    printk("Memory: %luk/%luk available (%dk kernel code, %dk reserved, %dk data, %ldk highmem)\n",
-           (unsigned long)nr_free_pages() << (PAGE_SHIFT - 10),
-           max_mapnr << (PAGE_SHIFT - 10),
+    printk("Memory: %luM/%luM available (%dk kernel code, %dM reserved, %dk data, %ldM highmem)\n",
+           (unsigned long)totalUsablePages >> 8,
+           max_mapnr  >> 8,
            codesize >> 10,
-           reservedpages << (PAGE_SHIFT - 10),
+           reservedpages >> 8,
            datasize >> 10, 
-           (unsigned long)(totalUsablePages << (PAGE_SHIFT - 10)));
+           (unsigned long)(highUsablePages >> 8));
 
     /// 4.清除用户空间页表 0-3G
     //smp 暂不清除，ap需要使用
