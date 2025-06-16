@@ -4,6 +4,7 @@
 #include <thread.h>
 #include <arch/x86/page.h>
 #include <arch/linkage.h>
+#include <arch/x86/pgtable.h>
 
 /**
  * 直接映射
@@ -42,6 +43,9 @@ void __set_fixmap (enum fixed_addresses idx,
 
 #define set_fixmap(idx, phys) \
 		__set_fixmap(idx, phys, PAGE_KERNEL)
+
+#define set_fixmap_nocache(idx, phys) \
+		__set_fixmap(idx, phys, PAGE_KERNEL_NOCACHE)
 
 extern pte_t *fixed_kmap_pte;//fix映射区中的临时映射 pte
 extern pgprot_t fixed_kmap_prot;//保护权限 PAGE_KERNEL

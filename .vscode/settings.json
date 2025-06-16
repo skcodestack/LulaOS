@@ -23,6 +23,8 @@
         "mm.h": "c",
         "system.h": "c",
         "atomic.h": "c",
-        "spinlock.h": "c"
+        "spinlock.h": "c",
+        "cpu.h": "c",
+        "apic.h": "c"
     }
 }

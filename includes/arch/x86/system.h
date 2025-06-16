@@ -22,4 +22,8 @@
 #define load_cr3(x) \
 	__asm__ __volatile__("movl %0,%%cr3": :"r" (__pa(x)))
 
+#define cli() __cli()
+#define sti() __sti()
+#define save_flags(x) __save_flags(x)
+#define restore_flags(x) __restore_flags(x)
 #endif

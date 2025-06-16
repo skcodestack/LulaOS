@@ -76,4 +76,5 @@ extern pg_data_t contig_page_data;
 
 void __init zone_init(); 
 void __free_pages(struct page *page, unsigned int order);
+struct page * __alloc_pages(unsigned int gfp_mask, unsigned int order);
 #endif

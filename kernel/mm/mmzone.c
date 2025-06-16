@@ -244,3 +244,7 @@ void free_pages(unsigned long addr, unsigned int order)
     if (addr != 0)
         __free_pages(virt_to_page(addr), order);
 }
+
+struct page * __alloc_pages(unsigned int gfp_mask, unsigned int order){
+    return NULL;
+}

@@ -58,8 +58,8 @@ extern unsigned long pg0[];
 #define PAGE_READONLY __pgprot(_PAGE_PRESENT | _PAGE_USER | _PAGE_ACCESSED)
 
 #define PAGE_KERNEL __pgprot(_PAGE_PRESENT | _PAGE_RW | _PAGE_DIRTY | _PAGE_ACCESSED)
-#define PAGE_KERNEL_RO  (PAGE_KERNEL & ~_PAGE_RW)
-#define PAGE_KERNEL_NOCACHE (PAGE_KERNEL | _PAGE_PCD)
+#define PAGE_KERNEL_RO  __pgprot(_PAGE_PRESENT | _PAGE_DIRTY | _PAGE_ACCESSED)
+#define PAGE_KERNEL_NOCACHE __pgprot(_PAGE_PRESENT | _PAGE_RW | _PAGE_DIRTY | _PAGE_ACCESSED | _PAGE_PCD)
 
  
 #define pte_present(x) ((x).pte_low & _PAGE_PRESENT) 
