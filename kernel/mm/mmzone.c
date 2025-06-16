@@ -244,3 +244,145 @@ void free_pages(unsigned long addr, unsigned int order)
     if (addr != 0)
         __free_pages(virt_to_page(addr), order);
 }
+
+
+
+struct page * __alloc_pages(unsigned int gfp_mask, unsigned int order, zonelist_t *zonelist)
+{
+//     unsigned long min;
+// 	zone_t **zone, * classzone;
+// 	struct page * page;
+// 	int freed;
+
+// 	zone = zonelist->zones;
+// 	classzone = *zone;
+// 	min = 1UL << order;
+// 	for (;;) {
+// 		zone_t *z = *(zone++);
+// 		if (!z)
+// 			break;
+
+// 		min += z->pages_low;
+// 		//空闲页面总量大于最低线+请求分配页面数
+// 		if (z->free_pages > min) {
+// 			//分配 rmqueue
+// 			page = rmqueue(z, order);
+// 			if (page)
+// 				return page;
+// 		}
+// 	}
+
+// 	//可分配管理区都内存紧张，重新平衡标识设为1
+// 	classzone->need_balance = 1;
+// 	mb();//内存屏障
+// 	//内核线程kswapd在一个等待队列中睡眠，唤醒
+// 	if (waitqueue_active(&kswapd_wait))
+// 		wake_up_interruptible(&kswapd_wait);
+
+// 	//下调最低水位/4 ，看是否满足条件，如果满足，开始分配rmqueue
+// 	zone = zonelist->zones;
+// 	min = 1UL << order;
+// 	for (;;) {
+// 		unsigned long local_min;
+// 		zone_t *z = *(zone++);
+// 		if (!z)
+// 			break;
+
+// 		local_min = z->pages_min;
+// 		if (!(gfp_mask & __GFP_WAIT))
+// 			local_min >>= 2;
+// 		min += local_min;
+// 		if (z->free_pages > min) {
+// 			page = rmqueue(z, order);
+// 			if (page)
+// 				return page;
+// 		}
+// 	}
+
+// 	/* here we're in the low on memory slow path
+
+// 		内存不足的缓慢路径
+
+
+
+// 		如果分配还不成功，这时候就要看是哪类进程在请求分配内存页面。其中PF_MEMALLOC
+// 和PF_MEMDIE 是进程的task_struct 结构中flags 域的值，对于正在分配页面的进程（如
+// kswapd 内核线程），则其PF_MEMALLOC 的值为1（一般进程的这个标志为0），而对于使内存
+// 溢出而被杀死的进程，则其PF_MEMDIE 为1。不管哪种情况，都说明必须给该进程分配页面
+// （想想为什么）。因此，继续进行分配
+// 	*/
+
+// rebalance:
+// 	if (current->flags & (PF_MEMALLOC | PF_MEMDIE)) {
+// 		//继续分配 rmqueue
+// 		zone = zonelist->zones;
+// 		for (;;) {
+// 			zone_t *z = *(zone++);
+// 			if (!z)
+// 				break;
+
+// 			page = rmqueue(z, order);
+// 			if (page)
+// 				return page;
+// 		}
+// 		return NULL;
+// 	}
+
+// 	/* Atomic allocations - we can't balance anything
+// 	如果请求分配页面的进程不能等待，也不能被重新调度，只好在没有分配到页面的情况
+// 下“空手”返回
+// */
+// 	if (!(gfp_mask & __GFP_WAIT))
+// 		return NULL;
+
+// 	/****
+
+
+// 	如果经过几番努力，必须得到页面的进程（如kswapd）还没有分配到页面，就要调用
+// 	balance_classzone（）函数把当前进程所占有的局部页面释放出来。如果释放成功，则返回
+// 	一个page 结构指针，指向页面块中第一个页面的起始地址。
+
+
+// 	*/
+// 	page = balance_classzone(classzone, gfp_mask, order, &freed);
+// 	if (page)
+// 		return page;
+
+// 	//继续进行分配
+// 	zone = zonelist->zones;
+// 	min = 1UL << order;
+// 	for (;;) {
+// 		zone_t *z = *(zone++);
+// 		if (!z)
+// 			break;
+
+// 		min += z->pages_min;
+// 		if (z->free_pages > min) {
+// 			page = rmqueue(z, order);
+// 			if (page)
+// 				return page;
+// 		}
+// 	}
+
+// 	/* Don't let big-order allocations loop 
+	
+// 	*/
+// 	if (order > 3)
+// 		return NULL;
+
+// 	/* Yield for kswapd, and try again
+// 		 重试
+// 	*/
+// 	current->policy |= SCHED_YIELD;
+// 	__set_current_state(TASK_RUNNING);
+// 	schedule();
+// 	goto rebalance;
+
+    return NULL;
+}
+
+struct page * __alloc_pages(unsigned int gfp_mask, unsigned int order)
+{
+	return __alloc_pages(gfp_mask, order,
+		contig_page_data.node_zonelists+(gfp_mask & GFP_ZONEMASK));
+}

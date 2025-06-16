@@ -73,7 +73,10 @@ extern pg_data_t contig_page_data;
 		sizeof(mem_map_t) - ((x) % sizeof(mem_map_t))))
 
 #define __free_page(p) (__free_pages(p, 0))
+ 
 
 void __init zone_init(); 
 void __free_pages(struct page *page, unsigned int order);
+struct page * __alloc_pages(unsigned int gfp_mask, unsigned int order);
+
 #endif

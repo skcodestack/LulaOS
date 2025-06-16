@@ -2,8 +2,7 @@
 #define __SYSTEM_H__
 #include <arch/x86/page.h>
 
-#define LOCK "lock ; " 
-
+#define LOCK "lock ; "
 
 #define __save_flags(x)		__asm__ __volatile__("pushfl ; popl %0":"=g" (x): )
 #define __restore_flags(x) 	__asm__ __volatile__("pushl %0 ; popfl":  :"g" (x):"memory", "cc")
@@ -21,5 +20,10 @@
 
 #define load_cr3(x) \
 	__asm__ __volatile__("movl %0,%%cr3": :"r" (__pa(x)))
+
+#define cli() __cli()
+#define sti() __sti()
+#define save_flags(x) __save_flags(x)
+#define restore_flags(x) __restore_flags(x)
 
 #endif

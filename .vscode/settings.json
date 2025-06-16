@@ -23,6 +23,9 @@
         "mm.h": "c",
         "system.h": "c",
         "atomic.h": "c",
-        "spinlock.h": "c"
+        "spinlock.h": "c",
+        "slab.h": "c",
+        "wait.h": "c",
+        "semaphore.h": "c"
     }
 }
