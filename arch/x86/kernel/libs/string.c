@@ -10,6 +10,19 @@ size_t strnlen(const char *s, size_t count)
 	return sc - s;
 }
 
+int strncmp(const char * cs,const char * ct,size_t count)
+{
+	register signed char __res = 0;
+
+	while (count) {
+		if ((__res = *cs - *ct++) != 0 || !*cs++)
+			break;
+		count--;
+	}
+
+	return __res;
+}
+
 void *_memcpy(void *dest, const void *src, uint32_t n)
 {
 	int d0, d1, d2;

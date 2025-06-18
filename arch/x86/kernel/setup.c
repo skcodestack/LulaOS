@@ -7,6 +7,7 @@
 #include <mm/mm.h>
 #include <libs/memcpy.h>
 #include <arch/x86/highmem.h> 
+#include <arch/x86/acpi.h>
 
 unsigned long init_pg_tables_end = ~0UL;
 multiboot_info_t * multiboot_params_addr;
@@ -197,8 +198,9 @@ static __init unsigned long setup_memery(){
 
 void __init setup_arch(){
     copy_multiboot_info();
-    setup_memery();
+    setup_memery(); 
 
+    acpi_tables_init();
     tty_set_buffer_base(PAGE_OFFSET);
 }
 

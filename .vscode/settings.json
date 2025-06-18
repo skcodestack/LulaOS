@@ -25,6 +25,7 @@
         "atomic.h": "c",
         "spinlock.h": "c",
         "cpu.h": "c",
-        "apic.h": "c"
+        "apic.h": "c",
+        "acpi.h": "c"
     }
 }
