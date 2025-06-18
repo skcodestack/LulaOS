@@ -19,10 +19,10 @@ static inline void set_pte_phys (unsigned long vaddr,
 		return;
 	} 
 	pte_t * pte = pte_offset(pgd, vaddr);
-	if (pte_val(*pte)){
-		printk("PAE BUG #00!\n");
-		return;
-    }    
+	// if (pte_val(*pte)){
+	// 	printk("PAE BUG #00!\n");
+	// 	return;
+    // }    
 	pgprot_t prot = __pgprot(pgprot_val(PAGE_KERNEL) | pgprot_val(flags));
 	set_pte(pte, mk_pte_phys(phys, prot)); 
 }

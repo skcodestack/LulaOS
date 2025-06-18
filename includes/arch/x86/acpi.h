@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include <arch/linkage.h>
 
-typedef int (*acpi_table_handler) (acpi_table_header * header, unsigned long);
 
 #define LO_RSDP_WINDOW_BASE         	0	/* Physical Address */
 #define HI_RSDP_WINDOW_BASE         	0xE0000	/* Physical Address */

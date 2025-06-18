@@ -32,6 +32,9 @@ enum fixed_addresses {
     /** fixed  temp mmap area 固定映射区中的临时映射区*/
     FIX_KMAP_BEGIN,
     FIX_KMAP_END = FIX_KMAP_BEGIN+(KM_TYPE_NR*NR_CPUS)-1,
+
+    FIX_ACPI_BEGIN,
+    FIX_ACPI_END = FIX_ACPI_BEGIN + MAX_IO_APICS-1,
     __end_of_fixed_addresses
 };
 
