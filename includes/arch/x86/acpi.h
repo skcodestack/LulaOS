@@ -59,6 +59,20 @@ static char *acpi_table_signatures[ACPI_TABLE_COUNT] = {
 	"XSDT"
 };
 
+enum {
+	ACPI_MADT_LAPIC = 0,
+	ACPI_MADT_IOAPIC,
+	ACPI_MADT_INT_SRC_OVR,
+	ACPI_MADT_NMI_SRC,
+	ACPI_MADT_LAPIC_NMI,
+	ACPI_MADT_LAPIC_ADDR_OVR,
+	ACPI_MADT_IOSAPIC,
+	ACPI_MADT_LSAPIC,
+	ACPI_MADT_PLAT_INT_SRC,
+	ACPI_MADT_LX2APIC,
+	ACPI_MADT_ENTRY_COUNT
+};
+
 typedef struct {		 
 	char signature[4];	 
 	uint32_t length;	 
@@ -99,6 +113,55 @@ struct acpi_table_madt {
 } __attribute__ ((packed));;
 
 
+typedef struct {
+	uint8_t type;
+	uint8_t length;
+} acpi_madt_entry_header __attribute__ ((packed));
+
+struct acpi_table_lapic {
+	acpi_madt_entry_header	header;
+	uint8_t			acpi_id;
+	uint8_t			id;
+	struct {
+		uint32_t			enabled:1;
+		uint32_t			reserved:31;
+	}			flags;
+} __attribute__ ((packed));
+
+struct acpi_table_ioapic {
+	acpi_madt_entry_header	header;
+	uint8_t			id;
+	uint8_t			reserved;
+	uint32_t			address;
+	uint32_t			global_irq_base;
+} __attribute__ ((packed));
+
+typedef struct {
+	uint16_t			polarity:2;
+	uint16_t			trigger:2;
+	uint16_t			reserved:12;
+} __attribute__ ((packed)) acpi_interrupt_flags;
+
+struct acpi_table_int_src_ovr {
+	acpi_madt_entry_header	header;
+	uint8_t			bus;
+	uint8_t			bus_irq;
+	uint32_t			global_irq;
+	acpi_interrupt_flags	flags;
+} __attribute__ ((packed));
+
+
+
+
+
+typedef struct {
+ uint32_t lapic_address;
+ struct acpi_table_lapic lapic;
+ struct acpi_table_ioapic ioapic;
+ struct acpi_table_int_src_ovr  ioapic_ovr;
+} acpi_table_context;
+
+acpi_table_context acpi_context;
 
 __init void  acpi_tables_init();
 

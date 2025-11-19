@@ -74,3 +74,10 @@ sudo apt install grub2-common grub-pc-bin xorriso
 
 
 
+### Run 
+```
+make all
+make debug-bochs 
+```
+
+

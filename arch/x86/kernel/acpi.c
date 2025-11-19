@@ -6,6 +6,8 @@
 #include <libs/memcpy.h>
 #include <arch/x86/highmem.h>
 
+acpi_table_context acpi_context= {0};
+
 typedef int (*acpi_table_handler) (unsigned long , unsigned long);
 
 acpi_table_handler handles[ACPI_TABLE_COUNT] = {NULL};
@@ -89,15 +91,65 @@ static struct acpi_table_rsdp* find_rsdp_entry()
 };
 
 
+static void __init apic_parse_lapic(void * addr){
+    struct acpi_table_lapic *entry = NULL;
+    entry = (struct acpi_table_lapic *)addr;
+
+    memcpy(&acpi_context.lapic,entry,sizeof(struct acpi_table_lapic));
+    printk("apic struct is %d,%d\n",acpi_context.lapic.id,acpi_context.lapic.acpi_id);
+}
+
+static void __init apic_parse_ioapic(void * addr){
+    struct acpi_table_ioapic *entry = NULL;
+    entry = (struct acpi_table_ioapic *)addr;
+
+    memcpy(&acpi_context.ioapic,entry,sizeof(struct acpi_table_ioapic));
+    printk("ioapic struct is %x,%d,%d\n",acpi_context.ioapic.address,acpi_context.ioapic.header.length,sizeof(struct acpi_table_ioapic));
+}
+
+static void __init apic_parse_int_src_ovr(void * addr){
+    struct acpi_table_int_src_ovr *entry = NULL;
+    entry = (struct acpi_table_int_src_ovr *)addr;
+
+    memcpy(&acpi_context.ioapic_ovr,entry,sizeof(struct acpi_table_int_src_ovr));
+    printk("ioapic_src_ovr struct is %d,%d\n",acpi_context.ioapic_ovr.header.length,sizeof(struct acpi_table_int_src_ovr));
+    printk("ioapic_src_ovr struct is %d,%d,%d\n",
+        acpi_context.ioapic_ovr.bus,
+        acpi_context.ioapic_ovr.bus_irq
+        ,acpi_context.ioapic_ovr.global_irq);
+}
+
+
 static int __init acpi_parse_madt(unsigned long len, unsigned long phys)
-{
-    printk("madt process func /n");
+{ 
     struct acpi_table_madt * madt;
     
     madt = (struct acpi_table_madt *)_rang_mapping(phys,len);
     unsigned long table_size = len - sizeof(struct acpi_table_madt);
-     (void * )madt + sizeof(struct acpi_table_madt);
+    acpi_madt_entry_header * entry_header =  (acpi_madt_entry_header *)((void * )madt + sizeof(struct acpi_table_madt));
 
+    acpi_context.lapic_address =  madt->lapic_address;
+
+    while (entry_header && table_size > 0)
+    {
+        switch (entry_header->type)
+        {
+            case ACPI_MADT_LAPIC:
+                apic_parse_lapic((void *)entry_header);
+                break;
+            case ACPI_MADT_IOAPIC:
+                apic_parse_ioapic((void *)entry_header);
+                break;
+            case ACPI_MADT_INT_SRC_OVR:
+                apic_parse_int_src_ovr((void *)entry_header);
+            break;
+            default:
+                break;
+        }
+
+        table_size = table_size - entry_header->length;
+        entry_header = (acpi_madt_entry_header *)((void *)entry_header + entry_header->length);
+    } 
 
     return 0;
 }
