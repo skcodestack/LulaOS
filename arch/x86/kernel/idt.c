@@ -5,6 +5,8 @@
 #include <arch/x86/segment.h>
 #include <printk.h>
 #include <stddef.h>
+#include <arch/x86/apic.h>
+#include <arch/x86/interrupts.h>
  
 
 // 30 system interrupt
@@ -28,6 +30,73 @@ asmlinkage void alignment_check(void);
 asmlinkage void machine_check(void);
 asmlinkage void simd_coprocessor_error(void);
 asmlinkage void virtualization_exception(void);
+
+asmlinkage void apic_timer_entry(void);
+asmlinkage void apic_error_entry(void);
+asmlinkage void system_call(void);
+/* 硬件中断入口桩（entry.S 中 BUILD_IRQ 宏生成）*/
+asmlinkage void irq_entry_0x20(void); asmlinkage void irq_entry_0x21(void); asmlinkage void irq_entry_0x22(void); asmlinkage void irq_entry_0x23(void); asmlinkage void irq_entry_0x24(void); asmlinkage void irq_entry_0x25(void); asmlinkage void irq_entry_0x26(void); asmlinkage void irq_entry_0x27(void);
+asmlinkage void irq_entry_0x28(void); asmlinkage void irq_entry_0x29(void); asmlinkage void irq_entry_0x2a(void); asmlinkage void irq_entry_0x2b(void); asmlinkage void irq_entry_0x2c(void); asmlinkage void irq_entry_0x2d(void); asmlinkage void irq_entry_0x2e(void); asmlinkage void irq_entry_0x2f(void);
+asmlinkage void irq_entry_0x30(void); asmlinkage void irq_entry_0x31(void); asmlinkage void irq_entry_0x32(void); asmlinkage void irq_entry_0x33(void); asmlinkage void irq_entry_0x34(void); asmlinkage void irq_entry_0x35(void); asmlinkage void irq_entry_0x36(void); asmlinkage void irq_entry_0x37(void);
+asmlinkage void irq_entry_0x38(void); asmlinkage void irq_entry_0x39(void); asmlinkage void irq_entry_0x3a(void); asmlinkage void irq_entry_0x3b(void); asmlinkage void irq_entry_0x3c(void); asmlinkage void irq_entry_0x3d(void); asmlinkage void irq_entry_0x3e(void); asmlinkage void irq_entry_0x3f(void);
+asmlinkage void irq_entry_0x40(void); asmlinkage void irq_entry_0x41(void); asmlinkage void irq_entry_0x42(void); asmlinkage void irq_entry_0x43(void); asmlinkage void irq_entry_0x44(void); asmlinkage void irq_entry_0x45(void); asmlinkage void irq_entry_0x46(void); asmlinkage void irq_entry_0x47(void);
+asmlinkage void irq_entry_0x48(void); asmlinkage void irq_entry_0x49(void); asmlinkage void irq_entry_0x4a(void); asmlinkage void irq_entry_0x4b(void); asmlinkage void irq_entry_0x4c(void); asmlinkage void irq_entry_0x4d(void); asmlinkage void irq_entry_0x4e(void); asmlinkage void irq_entry_0x4f(void);
+asmlinkage void irq_entry_0x50(void); asmlinkage void irq_entry_0x51(void); asmlinkage void irq_entry_0x52(void); asmlinkage void irq_entry_0x53(void); asmlinkage void irq_entry_0x54(void); asmlinkage void irq_entry_0x55(void); asmlinkage void irq_entry_0x56(void); asmlinkage void irq_entry_0x57(void);
+asmlinkage void irq_entry_0x58(void); asmlinkage void irq_entry_0x59(void); asmlinkage void irq_entry_0x5a(void); asmlinkage void irq_entry_0x5b(void); asmlinkage void irq_entry_0x5c(void); asmlinkage void irq_entry_0x5d(void); asmlinkage void irq_entry_0x5e(void); asmlinkage void irq_entry_0x5f(void);
+asmlinkage void irq_entry_0x60(void); asmlinkage void irq_entry_0x61(void); asmlinkage void irq_entry_0x62(void); asmlinkage void irq_entry_0x63(void); asmlinkage void irq_entry_0x64(void); asmlinkage void irq_entry_0x65(void); asmlinkage void irq_entry_0x66(void); asmlinkage void irq_entry_0x67(void);
+asmlinkage void irq_entry_0x68(void); asmlinkage void irq_entry_0x69(void); asmlinkage void irq_entry_0x6a(void); asmlinkage void irq_entry_0x6b(void); asmlinkage void irq_entry_0x6c(void); asmlinkage void irq_entry_0x6d(void); asmlinkage void irq_entry_0x6e(void); asmlinkage void irq_entry_0x6f(void);
+asmlinkage void irq_entry_0x70(void); asmlinkage void irq_entry_0x71(void); asmlinkage void irq_entry_0x72(void); asmlinkage void irq_entry_0x73(void); asmlinkage void irq_entry_0x74(void); asmlinkage void irq_entry_0x75(void); asmlinkage void irq_entry_0x76(void); asmlinkage void irq_entry_0x77(void);
+asmlinkage void irq_entry_0x78(void); asmlinkage void irq_entry_0x79(void); asmlinkage void irq_entry_0x7a(void); asmlinkage void irq_entry_0x7b(void); asmlinkage void irq_entry_0x7c(void); asmlinkage void irq_entry_0x7d(void); asmlinkage void irq_entry_0x7e(void); asmlinkage void irq_entry_0x7f(void);
+/* 0x80 is SYSCALL_VECTOR */
+asmlinkage void irq_entry_0x81(void); asmlinkage void irq_entry_0x82(void); asmlinkage void irq_entry_0x83(void); asmlinkage void irq_entry_0x84(void); asmlinkage void irq_entry_0x85(void); asmlinkage void irq_entry_0x86(void); asmlinkage void irq_entry_0x87(void);
+asmlinkage void irq_entry_0x88(void); asmlinkage void irq_entry_0x89(void); asmlinkage void irq_entry_0x8a(void); asmlinkage void irq_entry_0x8b(void); asmlinkage void irq_entry_0x8c(void); asmlinkage void irq_entry_0x8d(void); asmlinkage void irq_entry_0x8e(void); asmlinkage void irq_entry_0x8f(void);
+asmlinkage void irq_entry_0x90(void); asmlinkage void irq_entry_0x91(void); asmlinkage void irq_entry_0x92(void); asmlinkage void irq_entry_0x93(void); asmlinkage void irq_entry_0x94(void); asmlinkage void irq_entry_0x95(void); asmlinkage void irq_entry_0x96(void); asmlinkage void irq_entry_0x97(void);
+asmlinkage void irq_entry_0x98(void); asmlinkage void irq_entry_0x99(void); asmlinkage void irq_entry_0x9a(void); asmlinkage void irq_entry_0x9b(void); asmlinkage void irq_entry_0x9c(void); asmlinkage void irq_entry_0x9d(void); asmlinkage void irq_entry_0x9e(void); asmlinkage void irq_entry_0x9f(void);
+asmlinkage void irq_entry_0xa0(void); asmlinkage void irq_entry_0xa1(void); asmlinkage void irq_entry_0xa2(void); asmlinkage void irq_entry_0xa3(void); asmlinkage void irq_entry_0xa4(void); asmlinkage void irq_entry_0xa5(void); asmlinkage void irq_entry_0xa6(void); asmlinkage void irq_entry_0xa7(void);
+asmlinkage void irq_entry_0xa8(void); asmlinkage void irq_entry_0xa9(void); asmlinkage void irq_entry_0xaa(void); asmlinkage void irq_entry_0xab(void); asmlinkage void irq_entry_0xac(void); asmlinkage void irq_entry_0xad(void); asmlinkage void irq_entry_0xae(void); asmlinkage void irq_entry_0xaf(void);
+asmlinkage void irq_entry_0xb0(void); asmlinkage void irq_entry_0xb1(void); asmlinkage void irq_entry_0xb2(void); asmlinkage void irq_entry_0xb3(void); asmlinkage void irq_entry_0xb4(void); asmlinkage void irq_entry_0xb5(void); asmlinkage void irq_entry_0xb6(void); asmlinkage void irq_entry_0xb7(void);
+asmlinkage void irq_entry_0xb8(void); asmlinkage void irq_entry_0xb9(void); asmlinkage void irq_entry_0xba(void); asmlinkage void irq_entry_0xbb(void); asmlinkage void irq_entry_0xbc(void); asmlinkage void irq_entry_0xbd(void); asmlinkage void irq_entry_0xbe(void); asmlinkage void irq_entry_0xbf(void);
+asmlinkage void irq_entry_0xc0(void); asmlinkage void irq_entry_0xc1(void); asmlinkage void irq_entry_0xc2(void); asmlinkage void irq_entry_0xc3(void); asmlinkage void irq_entry_0xc4(void); asmlinkage void irq_entry_0xc5(void); asmlinkage void irq_entry_0xc6(void); asmlinkage void irq_entry_0xc7(void);
+asmlinkage void irq_entry_0xc8(void); asmlinkage void irq_entry_0xc9(void); asmlinkage void irq_entry_0xca(void); asmlinkage void irq_entry_0xcb(void); asmlinkage void irq_entry_0xcc(void); asmlinkage void irq_entry_0xcd(void); asmlinkage void irq_entry_0xce(void); asmlinkage void irq_entry_0xcf(void);
+asmlinkage void irq_entry_0xd0(void); asmlinkage void irq_entry_0xd1(void); asmlinkage void irq_entry_0xd2(void); asmlinkage void irq_entry_0xd3(void); asmlinkage void irq_entry_0xd4(void); asmlinkage void irq_entry_0xd5(void); asmlinkage void irq_entry_0xd6(void); asmlinkage void irq_entry_0xd7(void);
+asmlinkage void irq_entry_0xd8(void); asmlinkage void irq_entry_0xd9(void); asmlinkage void irq_entry_0xda(void); asmlinkage void irq_entry_0xdb(void); asmlinkage void irq_entry_0xdc(void); asmlinkage void irq_entry_0xdd(void); asmlinkage void irq_entry_0xde(void); asmlinkage void irq_entry_0xdf(void);
+asmlinkage void irq_entry_0xe0(void); asmlinkage void irq_entry_0xe1(void); asmlinkage void irq_entry_0xe2(void); asmlinkage void irq_entry_0xe3(void); asmlinkage void irq_entry_0xe4(void); asmlinkage void irq_entry_0xe5(void); asmlinkage void irq_entry_0xe6(void); asmlinkage void irq_entry_0xe7(void);
+asmlinkage void irq_entry_0xe8(void); asmlinkage void irq_entry_0xe9(void); asmlinkage void irq_entry_0xea(void); asmlinkage void irq_entry_0xeb(void); asmlinkage void irq_entry_0xec(void); asmlinkage void irq_entry_0xed(void); asmlinkage void irq_entry_0xee(void); asmlinkage void irq_entry_0xef(void);
+asmlinkage void irq_entry_0xf0(void); asmlinkage void irq_entry_0xf1(void); asmlinkage void irq_entry_0xf2(void); asmlinkage void irq_entry_0xf3(void); asmlinkage void irq_entry_0xf4(void); asmlinkage void irq_entry_0xf5(void); asmlinkage void irq_entry_0xf6(void); asmlinkage void irq_entry_0xf7(void);
+asmlinkage void irq_entry_0xf8(void); asmlinkage void irq_entry_0xf9(void); asmlinkage void irq_entry_0xfa(void); asmlinkage void irq_entry_0xfb(void); asmlinkage void irq_entry_0xfc(void); asmlinkage void irq_entry_0xfd(void); asmlinkage void irq_entry_0xfe(void); asmlinkage void irq_entry_0xff(void);
+
+/* 向量号 -> 入口桩地址映射表（0x20~0xFF, 0x80 置 NULL）*/
+static void *interrupt[NR_IRQS] = {
+    &irq_entry_0x20, &irq_entry_0x21, &irq_entry_0x22, &irq_entry_0x23, &irq_entry_0x24, &irq_entry_0x25, &irq_entry_0x26, &irq_entry_0x27,
+    &irq_entry_0x28, &irq_entry_0x29, &irq_entry_0x2a, &irq_entry_0x2b, &irq_entry_0x2c, &irq_entry_0x2d, &irq_entry_0x2e, &irq_entry_0x2f,
+    &irq_entry_0x30, &irq_entry_0x31, &irq_entry_0x32, &irq_entry_0x33, &irq_entry_0x34, &irq_entry_0x35, &irq_entry_0x36, &irq_entry_0x37,
+    &irq_entry_0x38, &irq_entry_0x39, &irq_entry_0x3a, &irq_entry_0x3b, &irq_entry_0x3c, &irq_entry_0x3d, &irq_entry_0x3e, &irq_entry_0x3f,
+    &irq_entry_0x40, &irq_entry_0x41, &irq_entry_0x42, &irq_entry_0x43, &irq_entry_0x44, &irq_entry_0x45, &irq_entry_0x46, &irq_entry_0x47,
+    &irq_entry_0x48, &irq_entry_0x49, &irq_entry_0x4a, &irq_entry_0x4b, &irq_entry_0x4c, &irq_entry_0x4d, &irq_entry_0x4e, &irq_entry_0x4f,
+    &irq_entry_0x50, &irq_entry_0x51, &irq_entry_0x52, &irq_entry_0x53, &irq_entry_0x54, &irq_entry_0x55, &irq_entry_0x56, &irq_entry_0x57,
+    &irq_entry_0x58, &irq_entry_0x59, &irq_entry_0x5a, &irq_entry_0x5b, &irq_entry_0x5c, &irq_entry_0x5d, &irq_entry_0x5e, &irq_entry_0x5f,
+    &irq_entry_0x60, &irq_entry_0x61, &irq_entry_0x62, &irq_entry_0x63, &irq_entry_0x64, &irq_entry_0x65, &irq_entry_0x66, &irq_entry_0x67,
+    &irq_entry_0x68, &irq_entry_0x69, &irq_entry_0x6a, &irq_entry_0x6b, &irq_entry_0x6c, &irq_entry_0x6d, &irq_entry_0x6e, &irq_entry_0x6f,
+    &irq_entry_0x70, &irq_entry_0x71, &irq_entry_0x72, &irq_entry_0x73, &irq_entry_0x74, &irq_entry_0x75, &irq_entry_0x76, &irq_entry_0x77,
+    &irq_entry_0x78, &irq_entry_0x79, &irq_entry_0x7a, &irq_entry_0x7b, &irq_entry_0x7c, &irq_entry_0x7d, &irq_entry_0x7e, &irq_entry_0x7f,
+    NULL, /* 0x80 SYSCALL_VECTOR */
+    &irq_entry_0x81, &irq_entry_0x82, &irq_entry_0x83, &irq_entry_0x84, &irq_entry_0x85, &irq_entry_0x86, &irq_entry_0x87,
+    &irq_entry_0x88, &irq_entry_0x89, &irq_entry_0x8a, &irq_entry_0x8b, &irq_entry_0x8c, &irq_entry_0x8d, &irq_entry_0x8e, &irq_entry_0x8f,
+    &irq_entry_0x90, &irq_entry_0x91, &irq_entry_0x92, &irq_entry_0x93, &irq_entry_0x94, &irq_entry_0x95, &irq_entry_0x96, &irq_entry_0x97,
+    &irq_entry_0x98, &irq_entry_0x99, &irq_entry_0x9a, &irq_entry_0x9b, &irq_entry_0x9c, &irq_entry_0x9d, &irq_entry_0x9e, &irq_entry_0x9f,
+    &irq_entry_0xa0, &irq_entry_0xa1, &irq_entry_0xa2, &irq_entry_0xa3, &irq_entry_0xa4, &irq_entry_0xa5, &irq_entry_0xa6, &irq_entry_0xa7,
+    &irq_entry_0xa8, &irq_entry_0xa9, &irq_entry_0xaa, &irq_entry_0xab, &irq_entry_0xac, &irq_entry_0xad, &irq_entry_0xae, &irq_entry_0xaf,
+    &irq_entry_0xb0, &irq_entry_0xb1, &irq_entry_0xb2, &irq_entry_0xb3, &irq_entry_0xb4, &irq_entry_0xb5, &irq_entry_0xb6, &irq_entry_0xb7,
+    &irq_entry_0xb8, &irq_entry_0xb9, &irq_entry_0xba, &irq_entry_0xbb, &irq_entry_0xbc, &irq_entry_0xbd, &irq_entry_0xbe, &irq_entry_0xbf,
+    &irq_entry_0xc0, &irq_entry_0xc1, &irq_entry_0xc2, &irq_entry_0xc3, &irq_entry_0xc4, &irq_entry_0xc5, &irq_entry_0xc6, &irq_entry_0xc7,
+    &irq_entry_0xc8, &irq_entry_0xc9, &irq_entry_0xca, &irq_entry_0xcb, &irq_entry_0xcc, &irq_entry_0xcd, &irq_entry_0xce, &irq_entry_0xcf,
+    &irq_entry_0xd0, &irq_entry_0xd1, &irq_entry_0xd2, &irq_entry_0xd3, &irq_entry_0xd4, &irq_entry_0xd5, &irq_entry_0xd6, &irq_entry_0xd7,
+    &irq_entry_0xd8, &irq_entry_0xd9, &irq_entry_0xda, &irq_entry_0xdb, &irq_entry_0xdc, &irq_entry_0xdd, &irq_entry_0xde, &irq_entry_0xdf,
+    &irq_entry_0xe0, &irq_entry_0xe1, &irq_entry_0xe2, &irq_entry_0xe3, &irq_entry_0xe4, &irq_entry_0xe5, &irq_entry_0xe6, &irq_entry_0xe7,
+    &irq_entry_0xe8, &irq_entry_0xe9, &irq_entry_0xea, &irq_entry_0xeb, &irq_entry_0xec, &irq_entry_0xed, &irq_entry_0xee, &irq_entry_0xef,
+    &irq_entry_0xf0, &irq_entry_0xf1, &irq_entry_0xf2, &irq_entry_0xf3, &irq_entry_0xf4, &irq_entry_0xf5, &irq_entry_0xf6, &irq_entry_0xf7,
+    &irq_entry_0xf8, &irq_entry_0xf9, &irq_entry_0xfa, &irq_entry_0xfb, &irq_entry_0xfc, &irq_entry_0xfd, &irq_entry_0xfe, &irq_entry_0xff,
+};
 
 void show_stack(unsigned long *esp)
 {
@@ -139,7 +208,7 @@ DO_HANDLE_ERROR_INFO(16, "coprocessor_error", coprocessor_error);
 DO_HANDLE_ERROR_INFO(17, "alignment_check", alignment_check);
 DO_HANDLE_ERROR_INFO(18, "machine_check", machine_check);
 DO_HANDLE_ERROR_INFO(19, "simd_coprocessor_error", simd_coprocessor_error);
-DO_HANDLE_ERROR_INFO(20, "virtualization_exception", virtualization_exception);
+// DO_HANDLE_ERROR_INFO(20, "virtualization_exception", virtualization_exception);
 
 asmlinkage void do_invalid_TSS(struct pt_regs *regs, long error_code)
 {
@@ -217,5 +286,24 @@ void _init_idt()
     _set_trap_gate_entry(19, &simd_coprocessor_error);
     _set_trap_gate_entry(20, &virtualization_exception);
 
-    // system call
+    // 覆盖向量空间：0x20 ~ 0x3f，设备 IRQ 向量
+    for (int i = 0; i < NR_VECTORS; i++) {
+        int vector = FIRST_EXTERNAL_VECTOR + i;
+        if(i >= NR_IRQS){
+            break;
+        }
+        if (vector == SYSCALL_VECTOR)  // 跳过 0x80
+            continue;
+        _set_interrupt_gate_entry(vector, interrupt[i]);
+    }
+
+    // APIC Timer 硬件中断门
+    _set_interrupt_gate_entry(TIMER_APIC_VECTOR, &apic_timer_entry);
+
+    // APIC Error 硬件中断门
+    _set_interrupt_gate_entry(ERROR_APIC_VECTOR, &apic_error_entry);
+
+    // system call：系统门（DPL=3，用户态可调用）
+    _set_system_gate_entry(SYSCALL_VECTOR, &system_call);
+    
 }

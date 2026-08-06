@@ -26,6 +26,7 @@
 #define IDT_TYPE_ATTR_SYSTEM_GATE_32BIT IDT_RESERVED(0) | IDT_GATE_TYPE(IDT_TYPE_TRAP_32BIT) | IDT_RESERVED2(0) | IDT_DPL(3) | IDT_PRESENT(1)
 
 
+
 extern uint64_t _idt[]; 
 
 void _set_task_gate_entry(uint8_t index);

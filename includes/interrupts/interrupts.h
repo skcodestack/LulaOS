@@ -29,11 +29,52 @@
 #define ABORT_MACHINE_CHECK_CODE 0x12
 #define FAULT_SIMD_FP_EXCEPTION_CODE 0x13
 #define FAULT_VIRTUALIZATION_EXCEPTION_CODE 0x14
-#define FAULT_CONTROL_PROTECTION_EXCEPTION_CODE 0x15
+#define FAULT_CONTROL_PROTECTION_EXCEPTION_CODE 0x15 
 
+
+#define FIRST_EXTERNAL_VECTOR	0x20
+#define SYSCALL_VECTOR		0x80
+#define	TIMER_APIC_VECTOR	0xEF  // APIC Timer 中断向量（不与 SPURIOUS/ERROR 冲突）
+#define ERROR_APIC_VECTOR	0xfe // 错误向量
+#define FIRST_DEVICE_VECTOR	0x31
+#define FIRST_SYSTEM_VECTOR	0xef
+#define NR_IRQS            224 // 设备 IRQ 数量（0x20~0xFF = 224）   
+#define NR_VECTORS 256
 
 
 void _init_interrupts();
 
+struct pt_regs;
+
+/* 硬件中断总入口（entry.S 调用） */
+void do_IRQ(struct pt_regs *regs, long error_code);
+
+/* 注册/注销设备中断处理函数 */
+int  request_irq(unsigned int vector,
+                 void (*handler)(int irq, void *dev_id, struct pt_regs *regs),
+                 const char *name,
+                 void *dev_id);
+void free_irq(unsigned int vector);
+
+/* ====== 系统调用 ====== */
+/* 系统调用号（Linux ABI 兼容） */
+#define SYS_EXIT     1
+#define SYS_FORK     2
+#define SYS_READ     3
+#define SYS_WRITE    4
+#define SYS_OPEN     5
+#define SYS_CLOSE    6
+#define SYS_GETPID   20
+#define NR_SYSCALLS  256   /* 系统调用表大小 */
+
+/* 系统调用入口（entry.S 调用） */
+long do_syscall(struct pt_regs *regs);
+
+/* 初始化系统调用表（内核启动时调用） */
+void syscall_init(void);
+
+/* 注册系统调用处理函数 */
+typedef long (*syscall_fn_t)(long, long, long, long, long);
+int register_syscall(unsigned int nr, syscall_fn_t fn);
 
 #endif

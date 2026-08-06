@@ -92,31 +92,49 @@ static struct acpi_table_rsdp* find_rsdp_entry()
 
 
 static void __init apic_parse_lapic(void * addr){
-    struct acpi_table_lapic *entry = NULL;
-    entry = (struct acpi_table_lapic *)addr;
+    struct acpi_table_lapic *entry = (struct acpi_table_lapic *)addr;
 
-    memcpy(&acpi_context.lapic,entry,sizeof(struct acpi_table_lapic));
-    printk("apic struct is %d,%d\n",acpi_context.lapic.id,acpi_context.lapic.acpi_id);
+    if (acpi_context.lapic_count >= ACPI_MAX_LAPIC) {
+        printk("lapic table full, ignoring entry id=%d\n", entry->id);
+        return;
+    }
+    memcpy(&acpi_context.lapics[acpi_context.lapic_count], entry, sizeof(struct acpi_table_lapic));
+    printk("lapic[%d] id=%d acpi_id=%d\n",
+        acpi_context.lapic_count,
+        acpi_context.lapics[acpi_context.lapic_count].id,
+        acpi_context.lapics[acpi_context.lapic_count].acpi_id);
+    acpi_context.lapic_count++;
 }
 
 static void __init apic_parse_ioapic(void * addr){
-    struct acpi_table_ioapic *entry = NULL;
-    entry = (struct acpi_table_ioapic *)addr;
+    struct acpi_table_ioapic *entry = (struct acpi_table_ioapic *)addr;
 
-    memcpy(&acpi_context.ioapic,entry,sizeof(struct acpi_table_ioapic));
-    printk("ioapic struct is %x,%d,%d\n",acpi_context.ioapic.address,acpi_context.ioapic.header.length,sizeof(struct acpi_table_ioapic));
+    if (acpi_context.ioapic_count >= ACPI_MAX_IOAPIC) {
+        printk("ioapic table full, ignoring entry id=%d\n", entry->id);
+        return;
+    }
+    memcpy(&acpi_context.ioapics[acpi_context.ioapic_count], entry, sizeof(struct acpi_table_ioapic));
+    printk("ioapic[%d] address=%x irq_base=%d\n",
+        acpi_context.ioapic_count,
+        acpi_context.ioapics[acpi_context.ioapic_count].address,
+        acpi_context.ioapics[acpi_context.ioapic_count].global_irq_base);
+    acpi_context.ioapic_count++;
 }
 
 static void __init apic_parse_int_src_ovr(void * addr){
-    struct acpi_table_int_src_ovr *entry = NULL;
-    entry = (struct acpi_table_int_src_ovr *)addr;
+    struct acpi_table_int_src_ovr *entry = (struct acpi_table_int_src_ovr *)addr;
 
-    memcpy(&acpi_context.ioapic_ovr,entry,sizeof(struct acpi_table_int_src_ovr));
-    printk("ioapic_src_ovr struct is %d,%d\n",acpi_context.ioapic_ovr.header.length,sizeof(struct acpi_table_int_src_ovr));
-    printk("ioapic_src_ovr struct is %d,%d,%d\n",
-        acpi_context.ioapic_ovr.bus,
-        acpi_context.ioapic_ovr.bus_irq
-        ,acpi_context.ioapic_ovr.global_irq);
+    if (acpi_context.int_src_ovr_count >= ACPI_MAX_INT_SRC_OVR) {
+        printk("int_src_ovr table full, ignoring entry bus_irq=%d\n", entry->bus_irq);
+        return;
+    }
+    memcpy(&acpi_context.int_src_ovrs[acpi_context.int_src_ovr_count], entry, sizeof(struct acpi_table_int_src_ovr));
+    printk("int_src_ovr[%d] bus=%d bus_irq=%d global_irq=%d\n",
+        acpi_context.int_src_ovr_count,
+        acpi_context.int_src_ovrs[acpi_context.int_src_ovr_count].bus,
+        acpi_context.int_src_ovrs[acpi_context.int_src_ovr_count].bus_irq,
+        acpi_context.int_src_ovrs[acpi_context.int_src_ovr_count].global_irq);
+    acpi_context.int_src_ovr_count++;
 }
 
 

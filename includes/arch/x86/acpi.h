@@ -14,8 +14,7 @@
 #define RSDP_SIG			"RSD PTR "
 #define RSDT_SIG 			"RSDT"
 #define RSDP_SCAN_STEP			16
-#define RSDP_CHECKSUM_LENGTH		20
-
+#define RSDP_CHECKSUM_LENGTH		20 
 
 
 enum {
@@ -154,15 +153,38 @@ struct acpi_table_int_src_ovr {
 
 
 
+#define ACPI_MAX_LAPIC        32
+#define ACPI_MAX_IOAPIC        8
+#define ACPI_MAX_INT_SRC_OVR  32
+
 typedef struct {
  uint32_t lapic_address;
- struct acpi_table_lapic lapic;
- struct acpi_table_ioapic ioapic;
- struct acpi_table_int_src_ovr  ioapic_ovr;
+ uint32_t lapic_count;
+ uint32_t ioapic_count;
+ uint32_t int_src_ovr_count;
+ struct acpi_table_lapic       lapics[ACPI_MAX_LAPIC];
+ struct acpi_table_ioapic      ioapics[ACPI_MAX_IOAPIC];
+ struct acpi_table_int_src_ovr int_src_ovrs[ACPI_MAX_INT_SRC_OVR];
 } acpi_table_context;
 
 acpi_table_context acpi_context;
 
 __init void  acpi_tables_init();
+
+// 根据 GSI 查找对应的 IOAPIC 索引
+// 返回 -1 表示未找到
+static inline int acpi_find_ioapic_by_gsi(uint32_t gsi) {
+    for (uint32_t i = 0; i < acpi_context.ioapic_count; i++) {
+        // 每个 IOAPIC 的 GSI 范围：[global_irq_base, global_irq_base + rte_count - 1]
+        // rte_count 需要从硬件读取，这里简单用下一个 IOAPIC 的 base 作为边界
+        uint32_t base = acpi_context.ioapics[i].global_irq_base;
+        uint32_t next_base = (i + 1 < acpi_context.ioapic_count) ?
+                             acpi_context.ioapics[i + 1].global_irq_base : 0xFFFFFFFF;
+        if (gsi >= base && gsi < next_base) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
 
 #endif

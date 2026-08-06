@@ -27,6 +27,7 @@
         "cpu.h": "c",
         "apic.h": "c",
         "acpi.h": "c",
-        "io.h": "c"
+        "io.h": "c",
+        "msr.h": "c"
     }
 }

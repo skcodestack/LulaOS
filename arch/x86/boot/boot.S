@@ -71,9 +71,11 @@ copy_end:
         xorl %ebx,%ebx				/* This is the boot CPU (BSP) */
 	    jmp 3f
 
-.global startup_smp
-startup_smp:
-
+/* ap start up  */
+.global startup_ap
+startup_ap:
+        hlt
+        jmp $
 3:       
         /* load page table */ 
         movl $(swapper_pg_dir-__PAGE_OFFSET),%eax

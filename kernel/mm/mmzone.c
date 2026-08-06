@@ -246,5 +246,79 @@ void free_pages(unsigned long addr, unsigned int order)
 }
 
 struct page * __alloc_pages(unsigned int gfp_mask, unsigned int order){
+    pg_data_t *pgdat = NODE_DATA;
+    zonelist_t *zonelist;
+    zone_t *zone;
+    unsigned long flags;
+
+    /* 1. 根据 gfp_mask 选择 zonelist */
+    int zone_idx = gfp_mask & GFP_ZONEMASK;
+    zonelist = pgdat->node_zonelists + zone_idx;
+
+    /* 2. 遍历 zonelist 中的各个 zone，找到可用块 */
+    for (int i = 0; (zone = zonelist->zones[i]) != NULL; i++) {
+        if (zone->size == 0)
+            continue;
+
+        spin_lock_irqsave(&zone->lock, flags);
+
+        /* 3. 从 order 阶开始向上查找可用空闲块 */
+        unsigned int curr_order;
+        free_area_t *area = NULL;
+        for (curr_order = order; curr_order < MAX_ORDER; curr_order++) {
+            area = zone->free_area + curr_order;
+            if (!list_empty(&area->free_list))
+                goto found;
+        }
+
+        spin_unlock_irqrestore(&zone->lock, flags);
+        continue; /* 当前 zone 无满足条件的块，尝试下一个 */
+
+found:
+        /* 4. 从空闲链表头部摘下一个块 */
+        struct page *base = zone->zone_mem_map;
+        struct page *alloc_page = list_entry(area->free_list.next, struct page, list);
+        list_del(&alloc_page->list);
+
+        /* 更新位图：将当前块的状态位翻转（置位 = 已分配） */
+        unsigned long page_idx = alloc_page - base;
+        unsigned long bitmap_idx = page_idx >> (1 + curr_order);
+        if (area->map)
+            __test_and_change_bit(bitmap_idx, area->map);
+
+        zone->free_pages -= (1UL << curr_order);
+
+        /* 5. expand：将大块拆分为目标 order */
+        /* 从 curr_order 向下到 order+1，把 buddy 半部放入对应低阶空闲链表 */
+        unsigned long size = 1UL << curr_order;
+        while (curr_order > order) {
+            area--;
+            curr_order--;
+            size >>= 1;
+            /* buddy 是分配块后面的那一半 */
+            struct page *buddy = alloc_page + size;
+            list_add(&buddy->list, &area->free_list);
+            zone->free_pages += (1UL << curr_order);
+        }
+
+        spin_unlock_irqrestore(&zone->lock, flags);
+
+        /* 6. 初始化返回的 page */
+        set_page_count(alloc_page, 1);
+        ClearPageReserved(alloc_page);
+
+        /* 对 order>0 的块，同时初始化后续 page */
+        unsigned long nr_pages = 1UL << order;
+        for (unsigned long k = 1; k < nr_pages; k++) {
+            struct page *p = alloc_page + k;
+            set_page_count(p, 1);
+            ClearPageReserved(p);
+        }
+
+        return alloc_page;
+    }
+
+    /* 所有 zone 均无法满足 */
+    printk("__alloc_pages: failed order=%d\n", order);
     return NULL;
 }

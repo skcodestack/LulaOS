@@ -14,7 +14,7 @@ void _kernel_init()
 
 asmlinkage void _kernel_main()
 {  
-    printk("Hello World!\nThis is LulaOS\n");
+    printk("This is LulaOS\n");
     
     // init_cpu();
 
@@ -22,8 +22,10 @@ asmlinkage void _kernel_main()
 
     _init_idt();
     _init_interrupts();
-
-    //sched_init,softirq_init,kmem_cache_init
+    
+    //sched_init();
+    //softirq_init();
+    //kmem_cache_init();
 
     mm_init();
 
