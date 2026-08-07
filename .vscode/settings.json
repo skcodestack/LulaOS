@@ -28,6 +28,7 @@
         "apic.h": "c",
         "acpi.h": "c",
         "io.h": "c",
-        "msr.h": "c"
+        "msr.h": "c",
+        "ptrace.h": "c"
     }
 }

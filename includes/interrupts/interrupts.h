@@ -45,9 +45,7 @@
 void _init_interrupts();
 
 struct pt_regs;
-
-/* 硬件中断总入口（entry.S 调用） */
-void do_IRQ(struct pt_regs *regs, long error_code);
+ 
 
 /* 注册/注销设备中断处理函数 */
 int  request_irq(unsigned int vector,

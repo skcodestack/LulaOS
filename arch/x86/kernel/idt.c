@@ -6,7 +6,7 @@
 #include <printk.h>
 #include <stddef.h>
 #include <arch/x86/apic.h>
-#include <arch/x86/interrupts.h>
+#include <interrupts/interrupts.h>
  
 
 // 30 system interrupt
@@ -208,7 +208,7 @@ DO_HANDLE_ERROR_INFO(16, "coprocessor_error", coprocessor_error);
 DO_HANDLE_ERROR_INFO(17, "alignment_check", alignment_check);
 DO_HANDLE_ERROR_INFO(18, "machine_check", machine_check);
 DO_HANDLE_ERROR_INFO(19, "simd_coprocessor_error", simd_coprocessor_error);
-// DO_HANDLE_ERROR_INFO(20, "virtualization_exception", virtualization_exception);
+DO_HANDLE_ERROR_INFO(20, "virtualization_exception", virtualization_exception);
 
 asmlinkage void do_invalid_TSS(struct pt_regs *regs, long error_code)
 {
@@ -284,7 +284,7 @@ void _init_idt()
     _set_trap_gate_entry(17, &alignment_check);
     _set_trap_gate_entry(18, &machine_check);
     _set_trap_gate_entry(19, &simd_coprocessor_error);
-    _set_trap_gate_entry(20, &virtualization_exception);
+    // _set_trap_gate_entry(20, &virtualization_exception);
 
     // 覆盖向量空间：0x20 ~ 0x3f，设备 IRQ 向量
     for (int i = 0; i < NR_VECTORS; i++) {
@@ -296,6 +296,7 @@ void _init_idt()
             continue;
         _set_interrupt_gate_entry(vector, interrupt[i]);
     }
+    printk("init_idt");
 
     // APIC Timer 硬件中断门
     _set_interrupt_gate_entry(TIMER_APIC_VECTOR, &apic_timer_entry);

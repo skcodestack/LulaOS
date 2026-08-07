@@ -274,7 +274,7 @@ struct page * __alloc_pages(unsigned int gfp_mask, unsigned int order){
         spin_unlock_irqrestore(&zone->lock, flags);
         continue; /* 当前 zone 无满足条件的块，尝试下一个 */
 
-found:
+found: ;
         /* 4. 从空闲链表头部摘下一个块 */
         struct page *base = zone->zone_mem_map;
         struct page *alloc_page = list_entry(area->free_list.next, struct page, list);
