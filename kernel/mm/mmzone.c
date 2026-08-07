@@ -322,3 +322,8 @@ found: ;
     printk("__alloc_pages: failed order=%d\n", order);
     return NULL;
 }
+
+
+struct page * alloc_pages(unsigned int gfp_mask, unsigned int order){
+    return __alloc_pages(gfp_mask, order);
+}
