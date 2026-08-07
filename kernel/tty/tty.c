@@ -23,22 +23,22 @@ void tty_set_theme(vga_attribute fg, vga_attribute bg)
 
 void tty_put_char(char c)
 {   
-     if(c == '\n'){
+    if(c == '\n'){
         TTY_COLOUMN = 0;
         TTY_ROW++;
-        if (TTY_ROW > TTY_HEIGHT)
+        if (TTY_ROW >= TTY_HEIGHT)
         {
             tty_scroll_up();
         }
         return;
-     }
+    }
     *(vga_buffer + TTY_COLOUMN + TTY_ROW * TTY_WIDTH) = (theme_color | c);
     TTY_COLOUMN++;
     if (TTY_COLOUMN >= TTY_WIDTH)
     {
         TTY_COLOUMN = 0;
         TTY_ROW++;
-        if (TTY_ROW > TTY_HEIGHT)
+        if (TTY_ROW >= TTY_HEIGHT)
         {
             tty_scroll_up();
         }
@@ -57,6 +57,7 @@ void tty_put_string(char *str)
 
 void tty_scroll_up()
 {
+    tty_clear();
 }
 
 void tty_clear()
