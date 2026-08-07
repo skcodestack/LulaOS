@@ -289,9 +289,9 @@ void _init_idt()
     // 覆盖向量空间：0x20 ~ 0x3f，设备 IRQ 向量
     for (int i = 0; i < NR_IRQS; i++) {
         int vector = FIRST_EXTERNAL_VECTOR + i;
-        if(vector > FIRST_SYSTEM_VECTOR){
-            break;
-        }
+        // if(vector > FIRST_SYSTEM_VECTOR){
+        //     break;
+        // }
         if (vector == SYSCALL_VECTOR)  // 跳过 0x80
             continue;
         _set_interrupt_gate_entry(vector, interrupt[i]);
