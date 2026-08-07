@@ -4,6 +4,7 @@
 #include <arch/x86/page.h>
 #include <printk.h>
 #include <libs/memcpy.h>
+#include <stddef.h>
 
 /*
  * ==================== 静态缓存描述符池 ====================
@@ -265,19 +266,21 @@ retry:
     goto retry;
 
 got_slab:
-    /* 弹出空闲链表头节点 */
-    unsigned int idx      = slab->free;
-    unsigned int *next_p  = (unsigned int *)((char *)slab->s_mem
-                                             + idx * cache->aligned_size);
-    slab->free = *next_p;   /* 推进空闲链表头 */
-    slab->inuse++;
+    {
+        /* 弹出空闲链表头节点 */
+        unsigned int idx     = slab->free;
+        unsigned int *next_p = (unsigned int *)((char *)slab->s_mem
+                                                + idx * cache->aligned_size);
+        slab->free = *next_p;   /* 推进空闲链表头 */
+        slab->inuse++;
 
-    obj = (char *)slab->s_mem + idx * cache->aligned_size;
+        obj = (char *)slab->s_mem + idx * cache->aligned_size;
 
-    /* 若 slab 已满，从 partial 移入 full */
-    if (slab->inuse == cache->num) {
-        list_del(&slab->list);
-        list_add(&slab->list, &cache->full);
+        /* 若 slab 已满，从 partial 移入 full */
+        if (slab->inuse == cache->num) {
+            list_del(&slab->list);
+            list_add(&slab->list, &cache->full);
+        }
     }
 
     spin_unlock_irqrestore(&slab_lock, flags);
