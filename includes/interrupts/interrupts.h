@@ -35,7 +35,7 @@
 #define FIRST_EXTERNAL_VECTOR	0x20
 #define SYSCALL_VECTOR		0x80
 #define	TIMER_APIC_VECTOR	0xEF  // APIC Timer 中断向量（不与 SPURIOUS/ERROR 冲突）
-#define ERROR_APIC_VECTOR	0xfe // 错误向量
+#define ERROR_APIC_VECTOR	0xee // 错误向量
 #define FIRST_DEVICE_VECTOR	0x31
 #define FIRST_SYSTEM_VECTOR	0xef
 #define NR_IRQS            224 // 设备 IRQ 数量（0x20~0xFF = 224）   
@@ -45,9 +45,7 @@
 void _init_interrupts();
 
 struct pt_regs;
-
-/* 硬件中断总入口（entry.S 调用） */
-void do_IRQ(struct pt_regs *regs, long error_code);
+ 
 
 /* 注册/注销设备中断处理函数 */
 int  request_irq(unsigned int vector,

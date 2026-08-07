@@ -75,7 +75,7 @@ copy_end:
 .global startup_ap
 startup_ap:
         hlt
-        jmp $
+        jmp .
 3:       
         /* load page table */ 
         movl $(swapper_pg_dir-__PAGE_OFFSET),%eax

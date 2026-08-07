@@ -6,7 +6,7 @@
 #include <arch/x86/acpi.h>
 #include <arch/x86/io.h>
 #include <arch/x86/ptrace.h>
-#include <arch/x86/interrupts.h>
+#include <interrupts/interrupts.h>
 #include <libs/memcpy.h>
 
 
