@@ -102,7 +102,7 @@ page_after:
         movw %ax,%fs
         movw %ax,%gs
         movw %ax,%ss
-        movl $stack_start,%esp   
+        movl $init_stack_end,%esp   
 
         movl $entry_kernel, %eax
         pushw $__KERNEL_CS                     
@@ -148,10 +148,11 @@ page_after:
 
 
     ENTRY(stack_start)
-        .long init_stack_start - 8092
+        .long init_stack_start + 8092
 
     init_stack_start:
         .fill 8092,1,0
+    init_stack_end:
 
     /* page table dir */
 .section .bss.page_table
