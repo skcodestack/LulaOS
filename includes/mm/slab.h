@@ -2,8 +2,6 @@
 #define __SLAB_H__
 
 #include <libs/list.h>
-#include <arch/x86/spinlock.h>
-#include <arch/x86/page.h>
 
 /* ======================== 常量定义 ======================== */
 
