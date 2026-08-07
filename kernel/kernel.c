@@ -16,7 +16,7 @@ asmlinkage void _kernel_main()
 {  
     printk("This is LulaOS\n");
     
-    // init_cpu();
+    init_cpu();
 
     setup_arch();
 
