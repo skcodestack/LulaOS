@@ -287,9 +287,9 @@ void _init_idt()
     // _set_trap_gate_entry(20, &virtualization_exception);
 
     // 覆盖向量空间：0x20 ~ 0x3f，设备 IRQ 向量
-    for (int i = 0; i < NR_VECTORS; i++) {
+    for (int i = 0; i < NR_IRQS; i++) {
         int vector = FIRST_EXTERNAL_VECTOR + i;
-        if(i >= NR_IRQS){
+        if(vector > FIRST_SYSTEM_VECTOR){
             break;
         }
         if (vector == SYSCALL_VECTOR)  // 跳过 0x80
@@ -301,8 +301,9 @@ void _init_idt()
     // APIC Timer 硬件中断门
     _set_interrupt_gate_entry(TIMER_APIC_VECTOR, &apic_timer_entry);
 
-    // APIC Error 硬件中断门
-    _set_interrupt_gate_entry(ERROR_APIC_VECTOR, &apic_error_entry);
+    // // APIC Error 硬件中断门 
+    _set_interrupt_gate_entry(ERROR_APIC_VECTOR, &apic_error_entry); 
+     
 
     // system call：系统门（DPL=3，用户态可调用）
     _set_system_gate_entry(SYSCALL_VECTOR, &system_call);
