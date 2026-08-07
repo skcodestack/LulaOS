@@ -96,7 +96,7 @@ static int handle_pte_fault(pte_t *pte, unsigned long address, unsigned long err
     int write_access = error_code & 0x02;
 
     /* ---- Case 1: PTE 条目为空（未建立任何映射） → Demand Paging ---- */
-    if (pte_val(*pte) == pte_val(PAGE_NONE)) {
+    if (pte_val(*pte) == pgprot_val(PAGE_NONE)) {
         struct page *new_page = __alloc_pages(0, 0);
         if (!new_page) {
             printk("[OOM] Cannot allocate page for address %#lx\n", address);
