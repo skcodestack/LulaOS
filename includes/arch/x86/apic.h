@@ -182,6 +182,7 @@ void ioapic_disable_irq(unsigned int vector);
 #define APIC_CAL_PIT_COUNT  ((PIT_FREQ * APIC_CAL_MS) / 1000)  // PIT 校准计数值
 
 void calibrate_apic_timer(void);
+void local_apic_init_ap(void);
 void do_apic_timer_interrupt(struct pt_regs *regs, long error_code);
 void do_apic_error_interrupt(struct pt_regs *regs, long error_code);
 

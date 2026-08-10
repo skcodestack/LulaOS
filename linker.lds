@@ -3,6 +3,14 @@ ENTRY(start_)
 SECTIONS
 { 
     . = 0xC0000000 + 0x100000;
+
+    .trampoline BLOCK(4K): AT(ADDR(.trampoline) - 0xC0000000)
+    {
+        _trampoline_start = .;
+        *(.trampoline)
+        _trampoline_end = .;
+    }
+
     .text BLOCK(4K): AT(ADDR(.text) - 0xC0000000)
     {   
         _text = .;

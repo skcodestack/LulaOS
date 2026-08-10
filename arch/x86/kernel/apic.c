@@ -62,6 +62,43 @@ void local_apic_init(){
 
 }
 
+/*
+ * local_apic_init_ap - AP 专用 Local APIC 初始化
+ *
+ * 与 BSP 的 local_apic_init() 类似，但跳过：
+ *   - disable_8259_pic()（已由 BSP 完成）
+ *   - ioapic_init()（已由 BSP 完成）
+ *
+ * 由 start_secondary() 在 AP 上线后调用。
+ */
+void local_apic_init_ap(void)
+{
+    remapping_apic();
+    enable_hardware_apic();
+
+    printk("AP: APIC ID %d initializing\n",
+           GET_APIC_ID(apic_read(APIC_ID)));
+
+    apic_setup_lvts();
+
+    /* 设置 TPR：接受优先级 > 32 的中断 */
+    unsigned int tpr = apic_read(APIC_TPR);
+    tpr &= ~APIC_TPR_MASK;
+    tpr |= APIC_TPR_VALUE(2, 0);
+    apic_write(APIC_TPR, tpr);
+
+    /* 软件使能 APIC（SPIV） */
+    unsigned int svr = apic_read(APIC_SPIV);
+    svr &= ~APIC_VECTOR_MASK;
+    svr |= APIC_SPIV_FOCUS_DISABLED;
+    svr |= APIC_SPIV_APIC_ENABLED;
+    svr |= SPURIOUS_APIC_VECTOR;
+    apic_write(APIC_SPIV, svr);
+
+    /* APIC Timer 校准（每个 AP 独立校准） */
+    calibrate_apic_timer();
+}
+
 void apic_setup_lvts(){
     //mask 8259A INTER
     unsigned val =  apic_read(APIC_LINT0);

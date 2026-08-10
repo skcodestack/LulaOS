@@ -1,6 +1,7 @@
 #include <interrupts/interrupts.h>
 #include <arch/x86/apic.h>
 #include <arch/x86/ptrace.h>
+#include <kernel/sched.h>
 #include <printk.h>
 #include <stddef.h>
 
@@ -104,14 +105,16 @@ asmlinkage void do_IRQ(struct pt_regs *regs, long error_code)
  * do_apic_timer_interrupt - APIC Timer 中断处理函数
  *
  * 由 entry.S 中 apic_timer_entry 调用，向量 = TIMER_APIC_VECTOR (0xEF)
+ * 每次 tick 调用 scheduler_tick() 更新时间片，驱动调度器
  */
 void do_apic_timer_interrupt(struct pt_regs *regs, long error_code)
 {
     /* EOI 必须在任何可能耗时的操作之前发送，
      * 否则 ISR 位会阻塞同级及低优先级中断 */
     apic_write(APIC_EOI, 0);
-    printk("APIC Timer interrupt\n");
-    /* TODO: 调用调度器或更新时间片 */
+
+    /* 驱动调度器：递减时间片，必要时置位 need_resched */
+    scheduler_tick();
 }
 
 /*

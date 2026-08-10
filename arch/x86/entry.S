@@ -470,8 +470,220 @@ ENTRY(system_call)
     iret
 
 
+/* ====== 进程上下文切换 ======
+ *
+ * void __switch_to(struct task_struct *prev, struct task_struct *next,
+ *                  struct task_struct **current_p_addr)
+ *
+ * 调用方（schedule）已将 prev / next / current_p_addr 依次压栈：
+ *   [esp+12] = prev           （先压）
+ *   [esp+8]  = next           （后压）
+ *   [esp+4]  = current_p_addr （最后压）
+ *   [esp]    = 返回地址（由 call __switch_to 压入）
+ *
+ * 上下文保存（prev）：
+ *   1. pushfl              保存 eflags
+ *   2. pushl %ebp/%ebx/%esi/%edi  保存被调用者保存寄存器
+ *   3. movl %esp → prev->thread.esp
+ *   4. 将返回地址存入 prev->thread.eip
+ *
+ * 上下文恢复（next）：
+ *   5. movl next->thread.esp → %esp
+ *   6. popl %edi/%esi/%ebx/%ebp
+ *   7. popfl
+ *   8. 更新 per-CPU current_p[cpu] = next
+ *   9. 加载 next 的页目录（CR3）
+ *  10. 若 PF_NEVER_STARTED → jmp ret_from_fork
+ *  11. ret → 弹出 next->thread.eip → 跳转到 schedule() 调用点
+ *
+ * task_struct 偏移（十进制）：
+ *   thread      = 32 (0x20)
+ *   flags       = 68 (0x44)
+ * thread_struct 偏移：
+ *   esp=0  eip=4  pgd=28(0x1C)
+ */
+ENTRY(__switch_to)
+    /* 保存 eflags */
+    pushfl
+
+    /* 保存 callee-saved 寄存器（GCC cdecl 约定） */
+    pushl %ebp
+    pushl %ebx
+    pushl %esi
+    pushl %edi
+
+    /* 保存当前栈指针到 prev->thread.esp
+     * prev 参数在 push 前位于 [esp+8]，5次 push 后偏移 +20
+     * 即 [esp+20] = prev */
+    movl 20(%esp), %eax       /* eax = prev */
+    movl %esp, 32(%eax)       /* prev->thread.esp (task offset 0x20 + thread.esp offset 0) */
+
+    /* 保存返回地址到 prev->thread.eip
+     * 返回地址在 5次 push 后位于 [esp+24] */
+    movl 24(%esp), %ecx
+    movl %ecx, 36(%eax)       /* prev->thread.eip (task offset 0x20 + thread.eip offset 4) */
+
+    /* 恢复 next 的栈指针 */
+    movl 28(%esp), %edx       /* edx = next */
+
+    /* 在 esp 切换前保存 current_p_addr 到 %eax
+     * （不能用 %esi/%edi/%ebx/%ebp，它们会被 popl 覆盖） */
+    movl 24(%esp), %eax       /* eax = current_p_addr */
+
+    movl 32(%edx), %esp       /* %esp = next->thread.esp */
+
+    /* 恢复 callee-saved 寄存器 */
+    popl %edi
+    popl %esi
+    popl %ebx
+    popl %ebp
+
+    /* 恢复 eflags */
+    popfl
+
+    /* 更新 per-CPU current_p[cpu] = next
+     * %eax 暂存的 current_p_addr 不受 popl/popfl 影响 */
+    movl %edx, (%eax)         /* *current_p_addr = next */
+
+    /* 切换 CR3 页目录（仅当 next->thread.pgd != 0 时） */
+    movl 60(%edx), %ecx       /* next->thread.pgd (task 0x20 + thread.pgd 0x1C = 60) */
+    testl %ecx, %ecx
+    jz 1f
+    movl %ecx, %cr3
+1:
+
+    /* 若任务从未启动（PF_NEVER_STARTED），跳到 ret_from_fork */
+    testl $0x00000001, 68(%edx)  /* next->flags (task offset 0x44 = 68) */
+    jz 2f
+    jmp SYMBOL_NAME(ret_from_fork)
+2:
+
+    /* 正常返回：从 next->thread.eip 处继续执行 */
+    ret
 
 
+/* ====== 新进程/线程的首次执行入口 ======
+ *
+ * __switch_to 检测到 PF_NEVER_STARTED 后跳转到此。
+ * 任务的内核栈已由 kernel_thread() / sys_fork() 初始化：
+ *   - kernel_thread: eip = kernel_thread_helper, esp 指向 [fn, arg]
+ *   - sys_fork:      eip = ret_from_intr, esp 指向 pt_regs
+ *
+ * 实现：读取 current->thread.eip，清除 PF_NEVER_STARTED，然后跳转。
+ */
+ENTRY(ret_from_fork)
+    /* 获取当前 CPU 的 current 指针（per-CPU） */
+    call SYMBOL_NAME(smp_processor_id)
+    movl SYMBOL_NAME(current_p)(,%eax,4), %eax  /* eax = current_p[cpu] */
 
+    /* 清除 PF_NEVER_STARTED 标志 */
+    andl $~0x00000001, 68(%eax)  /* current->flags (task offset 0x44 = 68) */
+
+    /* 跳转到 thread.eip 保存的地址（kernel_thread_helper 或 ret_from_intr） */
+    movl 36(%eax), %ecx       /* current->thread.eip (task 0x20 + thread.eip 0x04 = 36) */
+    jmp *%ecx
+
+
+/* ====== SMP AP Trampoline ======
+ *
+ * BSP 将此代码复制到物理地址 0x1000（SIPI 目标页），
+ * 然后发送 INIT-SIPI-SIPI 启动每个 AP。
+ *
+ * AP 执行路径：
+ *   实模式(16-bit) → 保护模式(32-bit) → 开启分页 → 调用 start_secondary()
+ *
+ * trampoline 页（物理 0x1000）内数据布局（由 BSP 的 smp_init 写入）：
+ *   0x1000 + 0x100 : AP 内核栈顶（虚拟地址，4 字节）
+ *   0x1000 + 0x104 : start_secondary 入口地址（虚拟地址，4 字节）
+ *   0x1000 + 0x200 : 临时 GDTR（6 字节：2 limit + 4 base）
+ *   0x1000 + 0x210 : 临时 GDT（3 * 8 = 24 字节：null + KCS + KDS）
+ */
+
+#define TRAMP_PAGE_PHYS     0x1000
+#define TRAMP_STACK_OFF     0x100
+#define TRAMP_ENTRY_OFF     0x104
+#define TRAMP_GDTR_OFF      0x200
+#define TRAMP_GDT_OFF       0x210
+#define __PAGE_OFFSET_ASM   0xC0000000
+
+.section .trampoline, "ax"
+
+ENTRY(smp_trampoline_start)
+
+    .code16
+    cli
+    xorw %ax, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %ss
+
+    /* bx = trampoline 页基址（物理 0x1000，即 AP 入口地址） */
+    movw $TRAMP_PAGE_PHYS, %bx
+
+    /* 加载临时 GDT（GDTR 在页内偏移 0x200） */
+    lgdt TRAMP_GDTR_OFF(%bx)
+
+    /* 进入保护模式：设置 CR0.PE */
+    movl %cr0, %eax
+    orb  $1, %al
+    movl %eax, %cr0
+
+    /* 远跳转到 32 位代码段
+     * GAS 在 .code16 下为 ljmp 生成 16 位偏移，但 32 位目标地址需要 32 位偏移
+     * 此处物理地址 = 链接虚拟地址 - 0xC0000000 */
+    ljmp $0x08, $(TRAMP_PAGE_PHYS + 0x50)
+
+    .code32
+    /* ===== 32 位保护模式（尚未开启分页） ===== */
+
+    /* 加载 BSP 的正式 GDT 和 IDT（物理地址 = 虚拟地址 - PAGE_OFFSET） */
+    lgdt (_gdt_pointer - __PAGE_OFFSET_ASM)
+    lidt (_idt_pointer - __PAGE_OFFSET_ASM)
+
+    /* 开启分页（所有 CPU 共享 swapper_pg_dir） */
+    movl $(swapper_pg_dir - __PAGE_OFFSET_ASM), %eax
+    movl %eax, %cr3
+    movl %cr0, %eax
+    orl  $0x80000000, %eax
+    movl %eax, %cr0
+
+    /* 远跳转确保 CS = __KERNEL_CS（使用虚拟地址，分页已开启） */
+    ljmp $__KERNEL_CS, $1f
+1:
+    movw $__KERNEL_DS, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %fs
+    movw %ax, %gs
+    movw %ax, %ss
+
+    /* 从 trampoline 页读取 AP 内核栈顶（虚拟地址，由 BSP 写入） */
+    movl (TRAMP_PAGE_PHYS + TRAMP_STACK_OFF), %esp
+
+    /* 调用 AP C 入口 start_secondary() */
+    call SYMBOL_NAME(start_secondary)
+
+    /* 不应返回 */
+2:  hlt
+    jmp 2b
+
+/* ===== Trampoline 数据区 ===== */
+
+/* GDTR 指针（偏移 0x200，6 字节）
+ * smp_init() 运行时会用正确的物理地址覆盖 gdt_base 字段 */
+    .org TRAMP_GDTR_OFF
+tramp_gdtr:
+    .word (3 * 8 - 1)          /* GDT limit：3 个描述符 */
+    .long (TRAMP_PAGE_PHYS + TRAMP_GDT_OFF)  /* GDT base（物理地址） */
+
+/* 临时 GDT（偏移 0x210，3 个描述符） */
+    .org TRAMP_GDT_OFF
+tramp_gdt:
+    .quad 0x0000000000000000   /* [0] null */
+    .quad 0x00cf9a000000ffff   /* [1] KCS: kernel code, base=0, limit=4G */
+    .quad 0x00cf92000000ffff   /* [2] KDS: kernel data, base=0, limit=4G */
+
+    .code32
+ENTRY(smp_trampoline_end)
 
 

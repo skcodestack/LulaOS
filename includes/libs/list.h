@@ -1,7 +1,12 @@
 #ifndef _LINUX_LIST_H
 #define _LINUX_LIST_H  
 #include <arch/linkage.h>
- 
+
+/* prefetch 提示 CPU 预取，空实现不影响正确性 */
+#ifndef prefetch
+#define prefetch(x) ((void)(x))
+#endif
+
 struct list_head {
 	struct list_head *next, *prev;
 };
