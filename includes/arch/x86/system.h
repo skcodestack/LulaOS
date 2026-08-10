@@ -1,8 +1,12 @@
 #ifndef __SYSTEM_H__
 #define __SYSTEM_H__
-#include <arch/x86/page.h>
 
-#define LOCK "lock ; " 
+/* LOCK 前缀必须在 page.h 之前定义，
+ * 否则经 page.h → mm.h → spinlock.h → rwlock.h 的包含链
+ * 到达 rwlock.h 时 LOCK 尚未定义，导致内联汇编编译失败 */
+#define LOCK "lock ; "
+
+#include <arch/x86/page.h>
 
 
 #define __save_flags(x)		__asm__ __volatile__("pushfl ; popl %0":"=g" (x): )

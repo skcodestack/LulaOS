@@ -107,7 +107,10 @@ asmlinkage void do_IRQ(struct pt_regs *regs, long error_code)
  */
 void do_apic_timer_interrupt(struct pt_regs *regs, long error_code)
 {
+    /* EOI 必须在任何可能耗时的操作之前发送，
+     * 否则 ISR 位会阻塞同级及低优先级中断 */
     apic_write(APIC_EOI, 0);
+    printk("APIC Timer interrupt\n");
     /* TODO: 调用调度器或更新时间片 */
 }
 

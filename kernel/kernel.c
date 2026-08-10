@@ -6,6 +6,7 @@
 #include <arch/x86/boot/multiboot.h>
 #include <arch/x86/setup.h>
 #include <arch/x86/cpu.h>
+#include <arch/x86/system.h>
 
 void _kernel_init()
 {
@@ -31,4 +32,11 @@ asmlinkage void _kernel_main()
     kmem_cache_init();
 
     printk("Finished\n");
+
+    /* 所有子系统初始化完成，开启 CPU 中断 */
+    sti();
+
+    /* 空闲循环，等待中断驱动 */
+    for (;;)
+        safe_halt();
 }
