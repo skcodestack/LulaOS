@@ -132,6 +132,7 @@ page_after:
         .fill 10,8,0					 
     _gdt_end:
 
+    .globl _gdt_pointer
     _gdt_pointer:
     _gdt_limit:	.word	_gdt_end - _gdt - 1  
     _gdt_base:	.long	_gdt
@@ -142,6 +143,7 @@ page_after:
         .fill 256,8,0
     _idt_end:
 
+    .globl _idt_pointer
     _idt_pointer:
     _idt_limit:	.word	_idt_end - _idt - 1
     _idt_base:	.long	_idt
