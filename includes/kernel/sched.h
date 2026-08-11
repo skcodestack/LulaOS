@@ -71,8 +71,8 @@ extern struct task_struct init_task;
 /* per-CPU current 指针数组：内联汇编需要取地址，不能用宏直接替换 */
 extern struct task_struct *current_p[NR_CPUS];
 
-/* 当前 CPU 的 current 任务：通过 smp_processor_id() 索引 */
-#define current  (*current_p[smp_processor_id()])
+/* 当前 CPU 的 current 任务指针：通过 smp_processor_id() 索引 */
+#define current  (current_p[smp_processor_id()])
 
 /* ========== 初始化宏 ========== */
 #define INIT_TASK(tsk) { \

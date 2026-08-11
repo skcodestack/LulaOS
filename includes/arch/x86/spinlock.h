@@ -1,12 +1,15 @@
 #ifndef __ASM_SPINLOCK_H
 #define __ASM_SPINLOCK_H
- 
- #include <arch/x86/rwlock.h>
- #include <arch/x86/atomic.h> 
-#include <arch/x86/system.h>
+
+/* spinlock_t 必须在所有 #include 之前定义，以打破循环包含链：
+ * spinlock.h → rwlock.h/atomic.h → system.h → page.h → mm.h → mmzone.h → spinlock.h */
 typedef struct {
 	volatile unsigned int lock;
 } spinlock_t;
+
+#include <arch/x86/rwlock.h>
+#include <arch/x86/atomic.h>
+#include <arch/x86/system.h>
  
 
  
