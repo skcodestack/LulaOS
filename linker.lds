@@ -4,19 +4,20 @@ SECTIONS
 { 
     . = 0xC0000000 + 0x100000;
 
-    .trampoline BLOCK(4K): AT(ADDR(.trampoline) - 0xC0000000)
-    {
-        _trampoline_start = .;
-        *(.trampoline)
-        _trampoline_end = .;
-    }
-
     .text BLOCK(4K): AT(ADDR(.text) - 0xC0000000)
     {   
         _text = .;
         * (.multiboot)
         * (.text)
         _etext = .; 
+    }
+
+    /* trampoline 放在 .text 之后，避免将 .multiboot 推出映像前 8KB */
+    .trampoline BLOCK(4K): AT(ADDR(.trampoline) - 0xC0000000)
+    {
+        _trampoline_start = .;
+        *(.trampoline)
+        _trampoline_end = .;
     }
 
     .init.text BLOCK(4K): AT(ADDR(.init.text) - 0xC0000000)
