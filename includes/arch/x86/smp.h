@@ -17,11 +17,12 @@
 #define SMP_TRAMPOLINE_PHYS    0x1000
 #define SMP_TRAMPOLINE_VECTOR  (SMP_TRAMPOLINE_PHYS >> 12)  /* = 0x01 */
 
-/* trampoline 页内数据偏移（BSP 写入，AP 读取） */
-#define SMP_TRAMP_STACK_OFF    0x100   /* AP 内核栈顶（虚拟地址） */
-#define SMP_TRAMP_ENTRY_OFF    0x104   /* start_secondary 入口地址 */
-#define SMP_TRAMP_GDTR_OFF     0x200   /* 临时 GDTR（6 字节） */
-#define SMP_TRAMP_GDT_OFF      0x210   /* 临时 GDT（6 * 8 = 48 字节） */
+/* trampoline 页内数据偏移（BSP 写入，AP 读取）
+ * 必须在 trampoline 代码结束之后（代码约 0x228 字节，取整至 0x300 起步） */
+#define SMP_TRAMP_STACK_OFF    0x300   /* AP 内核栈顶（虚拟地址） */
+#define SMP_TRAMP_ENTRY_OFF    0x304   /* start_secondary 入口地址 */
+#define SMP_TRAMP_GDTR_OFF     0x400   /* 临时 GDTR（6 字节） */
+#define SMP_TRAMP_GDT_OFF      0x410   /* 临时 GDT（3 * 8 = 24 字节） */
 
 #define SMP_MAX_CPUS           NR_CPUS  /* 32 */
 

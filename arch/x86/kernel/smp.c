@@ -74,16 +74,16 @@ void smp_init(void)
 
     /* ---- 2. 写入运行时数据到 trampoline 页 ---- */
 
-    /* start_secondary 虚拟地址（偏移 0x104，AP 开启分页后读取） */
+    /* start_secondary 虚拟地址（偏移 0x304，AP 开启分页后读取） */
     p = (unsigned int *)(tramp_page + SMP_TRAMP_ENTRY_OFF);
     *p = (unsigned int)start_secondary;
 
-    /* 临时 GDTR（偏移 0x200）：limit + base（物理地址） */
+    /* 临时 GDTR（偏移 0x400）：limit + base（物理地址） */
     /* limit 已由汇编初始化，只需更新 base 为正确的物理地址 */
     p = (unsigned int *)(tramp_page + SMP_TRAMP_GDTR_OFF + 2); /* skip limit word */
     *p = SMP_TRAMPOLINE_PHYS + SMP_TRAMP_GDT_OFF;
 
-    /* 临时 GDT（偏移 0x210）：已由汇编静态初始化（null + KCS + KDS） */
+    /* 临时 GDT（偏移 0x410）：已由汇编静态初始化（null + KCS + KDS） */
 
     /* ---- 3. 初始化 APIC ID 映射 ---- */
     for (i = 0; i < 256; i++)
@@ -116,7 +116,7 @@ void smp_init(void)
         }
         stack_top = (unsigned long)stack_page->virtual + PAGE_SIZE;
 
-        /* 写入 AP 栈顶虚拟地址到 trampoline 偏移 0x100 */
+        /* 写入 AP 栈顶虚拟地址到 trampoline 偏移 0x300 */
         p = (unsigned int *)(tramp_page + SMP_TRAMP_STACK_OFF);
         *p = stack_top;
 

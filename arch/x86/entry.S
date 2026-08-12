@@ -593,17 +593,17 @@ ENTRY(ret_from_fork)
  *   实模式(16-bit) → 保护模式(32-bit) → 开启分页 → 调用 start_secondary()
  *
  * trampoline 页（物理 0x1000）内数据布局（由 BSP 的 smp_init 写入）：
- *   0x1000 + 0x100 : AP 内核栈顶（虚拟地址，4 字节）
- *   0x1000 + 0x104 : start_secondary 入口地址（虚拟地址，4 字节）
- *   0x1000 + 0x200 : 临时 GDTR（6 字节：2 limit + 4 base）
- *   0x1000 + 0x210 : 临时 GDT（3 * 8 = 24 字节：null + KCS + KDS）
+ *   0x1000 + 0x300 : AP 内核栈顶（虚拟地址，4 字节）
+ *   0x1000 + 0x304 : start_secondary 入口地址（虚拟地址，4 字节）
+ *   0x1000 + 0x400 : 临时 GDTR（6 字节：2 limit + 4 base）
+ *   0x1000 + 0x410 : 临时 GDT（3 * 8 = 24 字节：null + KCS + KDS）
  */
 
 #define TRAMP_PAGE_PHYS     0x1000
-#define TRAMP_STACK_OFF     0x100
-#define TRAMP_ENTRY_OFF     0x104
-#define TRAMP_GDTR_OFF      0x200
-#define TRAMP_GDT_OFF       0x210
+#define TRAMP_STACK_OFF     0x300
+#define TRAMP_ENTRY_OFF     0x304
+#define TRAMP_GDTR_OFF      0x400
+#define TRAMP_GDT_OFF       0x410
 #define __PAGE_OFFSET_ASM   0xC0000000
 
 .section .trampoline, "ax"
@@ -669,14 +669,14 @@ ENTRY(smp_trampoline_start)
 
 /* ===== Trampoline 数据区 ===== */
 
-/* GDTR 指针（偏移 0x200，6 字节）
+/* GDTR 指针（偏移 0x400，6 字节）
  * smp_init() 运行时会用正确的物理地址覆盖 gdt_base 字段 */
     .org TRAMP_GDTR_OFF
 tramp_gdtr:
     .word (3 * 8 - 1)          /* GDT limit：3 个描述符 */
     .long (TRAMP_PAGE_PHYS + TRAMP_GDT_OFF)  /* GDT base（物理地址） */
 
-/* 临时 GDT（偏移 0x210，3 个描述符） */
+/* 临时 GDT（偏移 0x410，3 个描述符） */
     .org TRAMP_GDT_OFF
 tramp_gdt:
     .quad 0x0000000000000000   /* [0] null */
