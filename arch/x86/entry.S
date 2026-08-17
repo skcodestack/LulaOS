@@ -592,18 +592,15 @@ ENTRY(ret_from_fork)
  * AP 执行路径：
  *   实模式(16-bit) → 保护模式(32-bit) → 开启分页 → 调用 start_secondary()
  *
- * trampoline 页（物理 0x1000）内数据布局（由 BSP 的 smp_init 写入）：
- *   0x1000 + 0x300 : AP 内核栈顶（虚拟地址，4 字节）
- *   0x1000 + 0x304 : start_secondary 入口地址（虚拟地址，4 字节）
- *   0x1000 + 0x400 : 临时 GDTR（6 字节：2 limit + 4 base）
- *   0x1000 + 0x410 : 临时 GDT（3 * 8 = 24 字节：null + KCS + KDS）
+ * trampoline 页（物理 0x1000）内数据布局：
+ *   代码结束后紧跟 GDT（24字节）+ GDTR（6字节），无 .org 填充
+ *   0x1000 + 0x300 : AP 内核栈顶（虚拟地址，4 字节，BSP 写入）
+ *   0x1000 + 0x304 : start_secondary 入口地址（4 字节，BSP 写入）
  */
 
 #define TRAMP_PAGE_PHYS     0x1000
 #define TRAMP_STACK_OFF     0x300
 #define TRAMP_ENTRY_OFF     0x304
-#define TRAMP_GDTR_OFF      0x400
-#define TRAMP_GDT_OFF       0x410
 #define __PAGE_OFFSET_ASM   0xC0000000
 
 .section .trampoline, "ax"
@@ -620,8 +617,8 @@ ENTRY(smp_trampoline_start)
     /* bx = trampoline 页基址（物理 0x1000，即 AP 入口地址） */
     movw $TRAMP_PAGE_PHYS, %bx
 
-    /* 加载临时 GDT（GDTR 在页内偏移 0x200） */
-    lgdt TRAMP_GDTR_OFF(%bx)
+    /* 加载临时 GDT（GDTR 在页内偏移由链接器符号决定） */
+    lgdt (tramp_gdtr - smp_trampoline_start)(%bx)
 
     /* 进入保护模式：设置 CR0.PE */
     movl %cr0, %eax
@@ -667,21 +664,23 @@ ENTRY(smp_trampoline_start)
 2:  hlt
     jmp 2b
 
-/* ===== Trampoline 数据区 ===== */
+/* ===== Trampoline 数据区 =====
+ * GDT/GDTR 紧跟代码之后，不使用 .org 填充。
+ * smp_init() 通过链接器符号 _trampoline_gdt/_trampoline_gdtr 定位其偏移。 */
 
-/* GDTR 指针（偏移 0x400，6 字节）
- * smp_init() 运行时会用正确的物理地址覆盖 gdt_base 字段 */
-    .org TRAMP_GDTR_OFF
-tramp_gdtr:
-    .word (3 * 8 - 1)          /* GDT limit：3 个描述符 */
-    .long (TRAMP_PAGE_PHYS + TRAMP_GDT_OFF)  /* GDT base（物理地址） */
-
-/* 临时 GDT（偏移 0x410，3 个描述符） */
-    .org TRAMP_GDT_OFF
+/* 临时 GDT（3 个描述符，24 字节） */
+    .globl tramp_gdt
 tramp_gdt:
     .quad 0x0000000000000000   /* [0] null */
     .quad 0x00cf9a000000ffff   /* [1] KCS: kernel code, base=0, limit=4G */
     .quad 0x00cf92000000ffff   /* [2] KDS: kernel data, base=0, limit=4G */
+
+/* GDTR 指针（6 字节：limit + base）
+ * base 字段由 smp_init() 运行时用正确物理地址覆盖 */
+    .globl tramp_gdtr
+tramp_gdtr:
+    .word (3 * 8 - 1)                                        /* GDT limit */
+    .long (TRAMP_PAGE_PHYS + (tramp_gdt - smp_trampoline_start))  /* GDT base（物理地址） */
 
     .code32
 ENTRY(smp_trampoline_end)

@@ -21,7 +21,9 @@
 #include <printk.h>
 #include <mm/mmzone.h>
 
-/* ========== 全局 SMP 状态 ========== */
+/* 链接器符号（entry.S / linker.lds 导出），用于定位 GDT/GDTR 在 trampoline 页内的偏移 */
+extern unsigned char tramp_gdt[];
+extern unsigned char tramp_gdtr[];
 
 int smp_num_cpus = 1;           /* BSP 始终算一个 */
 int cpu_online_map = 1;         /* bit 0 = BSP 在线 */
@@ -78,12 +80,15 @@ void smp_init(void)
     p = (unsigned int *)(tramp_page + SMP_TRAMP_ENTRY_OFF);
     *p = (unsigned int)start_secondary;
 
-    /* 临时 GDTR（偏移 0x400）：limit + base（物理地址） */
-    /* limit 已由汇编初始化，只需更新 base 为正确的物理地址 */
-    p = (unsigned int *)(tramp_page + SMP_TRAMP_GDTR_OFF + 2); /* skip limit word */
-    *p = SMP_TRAMPOLINE_PHYS + SMP_TRAMP_GDT_OFF;
-
-    /* 临时 GDT（偏移 0x410）：已由汇编静态初始化（null + KCS + KDS） */
+    /* 临时 GDTR：limit 已由汇编初始化，只更新 base 字段为正确物理地址
+     * 偏移由链接器符号 _trampoline_gdtr 确定（紧跟代码之后，无 .org 填充） */
+    {
+        unsigned int gdt_phys = SMP_TRAMPOLINE_PHYS
+                              + (unsigned int)(tramp_gdt - _trampoline_start);
+        unsigned int gdtr_off = (unsigned int)(tramp_gdtr - _trampoline_start);
+        /* GDTR 格式：[limit:2][base:4]，base 在偏移 +2 处 */
+        *(unsigned int *)(tramp_page + gdtr_off + 2) = gdt_phys;
+    }
 
     /* ---- 3. 初始化 APIC ID 映射 ---- */
     for (i = 0; i < 256; i++)
