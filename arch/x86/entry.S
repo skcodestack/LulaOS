@@ -626,13 +626,24 @@ ENTRY(smp_trampoline_start)
     movl %eax, %cr0
 
     /* 远跳转到 32 位代码段
-     * 使用局部标签 1f 让汇编器自动计算目标物理地址，
-     * 避免硬编码偏移导致跳转到错误位置 */
-    ljmp $0x08, $1f
+     * .code16 下 ljmp 偏移字段为 16 位，不能直接用节标签（虚拟地址 >0xFFFF）
+     * 使用命名标签 tramp_pm32 计算节内偏移，加上物理基址得到正确目标
+     * （不能用局部标签 1f，在 ljmp 立即数表达式中解析可能指向错误位置） */
+    ljmp $0x08, $(TRAMP_PAGE_PHYS + (tramp_pm32 - smp_trampoline_start))
 
     .code32
     /* ===== 32 位保护模式（尚未开启分页） ===== */
-1:
+    .globl tramp_pm32
+tramp_pm32:
+
+    /* 【关键】先加载数据段寄存器，切换到 32 位平坦段（base=0, limit=4G）
+     * 否则 DS 仍是实模式残留（limit=0xFFFF），后续任何 >0xFFFF 的物理地址访问都会 #GP */
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %fs
+    movw %ax, %gs
+    movw %ax, %ss
 
     /* 加载 BSP 的正式 GDT 和 IDT（物理地址 = 虚拟地址 - PAGE_OFFSET） */
     lgdt (_gdt_pointer - __PAGE_OFFSET_ASM)
