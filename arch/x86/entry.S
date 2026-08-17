@@ -626,12 +626,13 @@ ENTRY(smp_trampoline_start)
     movl %eax, %cr0
 
     /* 远跳转到 32 位代码段
-     * GAS 在 .code16 下为 ljmp 生成 16 位偏移，但 32 位目标地址需要 32 位偏移
-     * 此处物理地址 = 链接虚拟地址 - 0xC0000000 */
-    ljmp $0x08, $(TRAMP_PAGE_PHYS + 0x50)
+     * 使用局部标签 1f 让汇编器自动计算目标物理地址，
+     * 避免硬编码偏移导致跳转到错误位置 */
+    ljmp $0x08, $1f
 
     .code32
     /* ===== 32 位保护模式（尚未开启分页） ===== */
+1:
 
     /* 加载 BSP 的正式 GDT 和 IDT（物理地址 = 虚拟地址 - PAGE_OFFSET） */
     lgdt (_gdt_pointer - __PAGE_OFFSET_ASM)

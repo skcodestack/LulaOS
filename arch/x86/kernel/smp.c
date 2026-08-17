@@ -84,8 +84,8 @@ void smp_init(void)
      * 偏移由链接器符号 _trampoline_gdtr 确定（紧跟代码之后，无 .org 填充） */
     {
         unsigned int gdt_phys = SMP_TRAMPOLINE_PHYS
-                              + (unsigned int)(tramp_gdt - _trampoline_start);
-        unsigned int gdtr_off = (unsigned int)(tramp_gdtr - _trampoline_start);
+                              + ((unsigned int)tramp_gdt - (unsigned int)_trampoline_start);
+        unsigned int gdtr_off = (unsigned int)tramp_gdtr - (unsigned int)_trampoline_start;
         /* GDTR 格式：[limit:2][base:4]，base 在偏移 +2 处 */
         *(unsigned int *)(tramp_page + gdtr_off + 2) = gdt_phys;
     }
