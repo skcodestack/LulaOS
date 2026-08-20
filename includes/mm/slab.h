@@ -50,6 +50,7 @@ struct kmem_cache {
     unsigned int    obj_size;       /* 用户请求的原始对象大小 */
     unsigned int    aligned_size;   /* 实际存储大小（对齐后） */
     unsigned int    num;            /* 每个 slab 页容纳的对象数 */
+    unsigned int    alloc_order;    /* 向伙伴系统申请的页面阶数 */
 
     /* ---- slab 链表 ---- */
     struct list_head partial;       /* 有空闲对象的 slab */

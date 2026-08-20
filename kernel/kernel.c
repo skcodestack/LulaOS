@@ -35,7 +35,8 @@ static __attribute__((noreturn)) void bsp_start_idle(void)
      *   movl $(init_thread_union+THREAD_SIZE), %esp
      */
     __asm__ __volatile__(
-        "leal  (init_thread_union + %0), %%esp\n\t"
+        "movl  $init_thread_union, %%esp\n\t"
+        "addl  %0, %%esp\n\t"
         :
         : "i"(THREAD_SIZE)
         : "memory"
@@ -49,10 +50,7 @@ static __attribute__((noreturn)) void bsp_start_idle(void)
     /* 开中断，进入 idle 循环 */
     sti();
     cpu_idle();
-
-    /* 不应到达这里 */
-    for (;;)
-        safe_halt();
+ 
 }
 
 asmlinkage void _kernel_main()

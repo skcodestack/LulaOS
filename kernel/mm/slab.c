@@ -59,9 +59,8 @@ static void slab_strncpy(char *dst, const char *src, unsigned int maxlen)
  *
  * 返回: 对象个数，0 表示对象过大无法放入
  */
-static unsigned int calc_num_objs(unsigned int aligned_size)
+static unsigned int calc_num_objs(unsigned int aligned_size, unsigned int order)
 {
-    unsigned int order = (aligned_size > PAGE_SIZE) ? 1 : 0;
     unsigned int total = PAGE_SIZE << order;
     unsigned int hdr_size    = sizeof(slab_t);
     unsigned int obj_start   = (hdr_size + SLAB_ALIGN_BYTES - 1)
@@ -97,15 +96,11 @@ static void slab_init_objs(slab_t *slab, unsigned int num, unsigned int aligned_
 
 /*
  * 单个 slab 占用的页面阶数
- * 一般对象用 order=0（1页），8192B 的缓存需要 order=1（2页）
+ * 从缓存描述符中读取预先计算的 alloc_order
  */
 static inline unsigned int cache_order(kmem_cache_t *cache)
 {
-    /* 对象占满整个 slab，需要算出总大小 */
-    /* 简化：对单个 slab 只有 1 个对象的大小缓存，使用 order=1 */
-    if (cache->obj_size > PAGE_SIZE)
-        return 1;
-    return 0;
+    return cache->alloc_order;
 }
 
 /*
@@ -115,8 +110,9 @@ static inline unsigned int cache_order(kmem_cache_t *cache)
  */
 static slab_t *kmem_cache_grow(kmem_cache_t *cache)
 {
+    /* __alloc_pages(gfp_mask, order): 0 = ZONE_NORMAL zonelist */
     unsigned int order = cache_order(cache);
-    struct page *page = __alloc_pages(order, 0);
+    struct page *page = __alloc_pages(0, order);
     if (!page) {
         printk("[SLAB] OOM: cannot grow cache '%s'\n", cache->name);
         return NULL;
@@ -236,11 +232,19 @@ kmem_cache_t *kmem_cache_create(const char *name, unsigned int size)
     unsigned int aligned_size = (size + SLAB_ALIGN_BYTES - 1)
                                 & ~(SLAB_ALIGN_BYTES - 1);
 
-    /* 计算每页可容纳对象数 */
-    unsigned int num = calc_num_objs(aligned_size);
-    if (num == 0) {
-        printk("[SLAB] object too large for slab (max 8K): %u bytes\n", size);
-        return NULL;
+    /*
+     * 动态计算最小 order：slab_t 头占用页首若干字节，
+     * 若 aligned_size 接近 PAGE_SIZE << order 则需提升 order。
+     * 参考 Linux 2.6.20 kmem_cache_create：对象至少容许 1 个/slab。
+     */
+    unsigned int order = 0;
+    unsigned int num;
+    while ((num = calc_num_objs(aligned_size, order)) == 0) {
+        order++;
+        if (order > 5) {  /* 最大 32 页 = 128KB，超出则拒绝创建 */
+            printk("[SLAB] object too large for slab: %u bytes\n", size);
+            return NULL;
+        }
     }
 
     /* 从静态池取出一个描述符 */
@@ -249,6 +253,7 @@ kmem_cache_t *kmem_cache_create(const char *name, unsigned int size)
     /* 填写描述符 */
     cache->obj_size     = size;
     cache->aligned_size = aligned_size;
+    cache->alloc_order  = order;
     cache->num          = num;
     cache->num_slabs    = 0;
 
@@ -265,8 +270,9 @@ kmem_cache_t *kmem_cache_create(const char *name, unsigned int size)
     /* 链入全局缓存链表 */
     list_add_tail(&cache->list, &cache_cache);
 
-    printk("[SLAB] created '%s': obj=%u aligned=%u num=%u/page\n",
-           cache->name, cache->obj_size, cache->aligned_size, cache->num);
+    printk("[SLAB] created '%s': obj=%u aligned=%u num=%u/slab order=%u\n",
+           cache->name, cache->obj_size, cache->aligned_size,
+           cache->num, cache->alloc_order);
 
     return cache;
 }
