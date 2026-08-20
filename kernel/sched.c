@@ -128,6 +128,10 @@ void schedule(void)
     /*
      * 若 prev 时间片耗尽且仍可运行，移入队列尾部，
      * 给它新的时间片，下一轮重新竞争 CPU
+     *
+     * 注意：idle 任务的 counter 永远是 MAX_TIMESLICE（scheduler_tick
+     * 对 idle 直接 return，不递减），因此这个条件对 idle 永远为假，
+     * 不会触发 list_del/list_add_tail，链表不会被破坏。
      */
     if (prev->state == TASK_RUNNING && prev->counter == 0) {
         prev->counter = prev->timeslice;

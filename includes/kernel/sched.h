@@ -145,6 +145,14 @@ static inline void add_task_to_runqueue(struct task_struct *p)
     runqueue_t *rq = &runqueues[smp_processor_id()];
     list_add_tail(&p->run_list, &rq->queue);
     rq->nr_running++;
+
+    /*
+     * 若当前 CPU 正在运行 idle 任务，设置 need_resched：
+     * cpu_idle() 的内层循环以 need_resched 为退出条件，
+     * 不置位则 idle 永远在 hlt，schedule() 不被调用，新任务饿死。
+     */
+    if (current == rq->idle)
+        rq->idle->need_resched = 1;
 }
 
 /* 将任务从运行队列移除 - per-CPU：从当前 CPU 的 runqueue 移除 */

@@ -173,15 +173,35 @@ void show_registers(struct pt_regs *regs)
 // default process exception handler
 static void inline do_trap(int trapnr, char *str, struct pt_regs *regs, long error_code)
 {
-    unsigned long *p = NULL;
-    p = (unsigned long *)(regs->esp + 0x98);
-    printk("trap:%d %s,ERROR_CODE:%d,regs_error_code:%d,RSP:%#018lx,RIP:%#018lx\n", trapnr, str, error_code,regs->error_code, regs->esp, *p);
+    /*
+     * Fault 类型异常：regs->eip 指向故障指令本身
+     * 读取故障地址处的指令字节，方便定位问题
+     */
+    unsigned char *ip = (unsigned char *)regs->eip;
+    printk("TRAP %d: %s  error_code=%ld\n", trapnr, str, error_code);
+    printk("  EIP: %08lx   CS: %04lx   EFLAGS: %08lx\n",
+           regs->eip, regs->cs & 0xffff, regs->eflags);
+    printk("  ESP: %08lx   SS: %08lx\n", regs->esp, regs->ss);
+    printk("  EAX: %08lx  EBX: %08lx  ECX: %08lx  EDX: %08lx\n",
+           regs->eax, regs->ebx, regs->ecx, regs->edx);
+    printk("  ESI: %08lx  EDI: %08lx  EBP: %08lx\n",
+           regs->esi, regs->edi, regs->ebp);
+    /* 打印故障地址处前后各 4 字节的指令字节码，便于反汇编定位 */
+    printk("  Code: ");
+    for (int i = -4; i < 8; i++)
+        printk("%02x ", ip[i]);
+    printk("\n");
 
-    if (!(regs->cs & 3))
-        goto kernel_trap;
+    if (regs->cs & 3) {
+        /* 用户态异常：暂不处理，直接返回（用户进程会被 iret 重试） */
+        return;
+    }
 
-kernel_trap:
-    show_registers(regs);
+    /* 内核态异常：打印调用栈上下文后停机，防止 iret 回到故障指令造成无限循环 */
+    printk("  *** Kernel trap - halting CPU ***\n");
+    for (;;) {
+        __asm__ volatile ("cli; hlt");
+    }
 }
 
 #define DO_HANDLE_ERROR_INFO(trapnr, str, name)                      \
@@ -270,7 +290,7 @@ void _init_idt()
     _set_system_gate_entry(3, &int3);
     _set_system_gate_entry(4, &overflow);
     _set_system_gate_entry(5, &bounds);
-    _set_trap_gate_entry(6, &invalid_op);
+    _set_interrupt_gate_entry(6, &invalid_op);   /* 中断门：自动清零 IF，防止 trap handler 中被嵌套中断 */
     _set_trap_gate_entry(7, &device_not_available);
     _set_trap_gate_entry(8, &double_fault);
     _set_trap_gate_entry(9, &coprocessor_segment_overrun);
