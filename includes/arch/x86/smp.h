@@ -17,11 +17,15 @@
 #define SMP_TRAMPOLINE_PHYS    0x1000
 #define SMP_TRAMPOLINE_VECTOR  (SMP_TRAMPOLINE_PHYS >> 12)  /* = 0x01 */
 
-/* trampoline 页内数据偏移（BSP 写入，AP 读取）
- * GDT / GDTR 紧随代码之后，偏移由链接器符号 tramp_gdt / tramp_gdtr 决定
- * BSP 运行时动态计算其物理地址，不使用硬编码偏移 */
-#define SMP_TRAMP_STACK_OFF    0x300   /* AP 内核栈顶（虚拟地址，代码结束后足够空间） */
-#define SMP_TRAMP_ENTRY_OFF    0x304   /* start_secondary 入口地址 */
+/* AP 启动栈描述符（参考 Linux 2.6.20 arch/i386/kernel/head.S stack_start）
+ * BSP 在发 SIPI 之前写入 esp 字段，AP 通过 movl ap_stack_start, %%esp 直接加载。
+ * 使用全局静态变量而非 trampoline 页动态字段，配合 AP 首指令 wbinvd，
+ * 从根本上避免 BSP 缓存未回写导致 AP 读到 ESP=0 的问题。 */
+struct ap_stack_start_t {
+    unsigned long  esp;   /* AP 内核栈顶虚拟地址（thread_union 顶部） */
+    unsigned short ss;    /* 段选择子，固定为 __KERNEL_DS (0x10) */
+};
+extern struct ap_stack_start_t ap_stack_start;
 
 #define SMP_MAX_CPUS           NR_CPUS  /* 32 */
 

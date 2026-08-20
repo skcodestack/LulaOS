@@ -30,6 +30,14 @@ extern unsigned char tramp_gdtr[];
 int smp_num_cpus = 1;           /* BSP 始终算一个 */
 int cpu_online_map = 1;         /* bit 0 = BSP 在线 */
 
+/* AP 启动栈描述符（参考 Linux 2.6.20 arch/i386/kernel/head.S stack_start）
+ * BSP 对每个 AP 分配 thread_union 后，在发 SIPI 前写入 esp。
+ * AP 在 trampoline 开启分页后直接执行 movl ap_stack_start, %%esp。 */
+struct ap_stack_start_t ap_stack_start = {
+    .esp = 0,
+    .ss  = 0x10,   /* __KERNEL_DS */
+};
+
 /* BSP ↔ AP 握手变量（参考 Linux 2.6.20 smpboot.c 第 89-90 行）
  * volatile 防止编译器优化掉轮询循环中的内存读取 */
 volatile int cpu_callout_map = 0;  /* BSP → AP：BSP 发完 IPI 后置位 */
@@ -67,25 +75,14 @@ void smp_init(void)
     unsigned int i;
     unsigned int trampoline_size;
     unsigned char *tramp_page;
-    unsigned int *p;
     /* ---- 1. 复制 trampoline 代码到物理 0x1000 ---- */
     trampoline_size = (unsigned int)(_trampoline_end - _trampoline_start);
     printk("SMP: trampoline code size = %u bytes\n", trampoline_size);
 
-    if (trampoline_size > SMP_TRAMP_STACK_OFF) {
-        printk("SMP: ERROR trampoline too large (%u > %u), SMP disabled\n",
-               trampoline_size, SMP_TRAMP_STACK_OFF);
-        return;
-    }
-
     tramp_page = (unsigned char *)__va(SMP_TRAMPOLINE_PHYS);
     memcpy(tramp_page, _trampoline_start, trampoline_size);
 
-    /* ---- 2. 写入运行时数据到 trampoline 页 ---- */
-
-    /* start_secondary 虚拟地址（偏移 0x304，AP 开启分页后读取） */
-    p = (unsigned int *)(tramp_page + SMP_TRAMP_ENTRY_OFF);
-    *p = (unsigned int)start_secondary;
+    /* ---- 2. 更新 trampoline 页内的 GDTR base 字段 ---- */
 
     /* 临时 GDTR：limit 已由汇编初始化，只更新 base 字段为正确物理地址
      * 偏移由链接器符号 _trampoline_gdtr 确定（紧跟代码之后，无 .org 填充） */
@@ -143,9 +140,10 @@ void smp_init(void)
         /* AP 内核栈顶 = thread_union 基址 + THREAD_SIZE */
         unsigned long stack_top = (unsigned long)tu + THREAD_SIZE;
 
-        /* 写入 AP 栈顶虚拟地址到 trampoline 偏移 0x300 */
-        p = (unsigned int *)(tramp_page + SMP_TRAMP_STACK_OFF);
-        *p = stack_top;
+        /* 写入 AP 栈顶地址到全局变量（参考 Linux 2.6.20 smpboot.c 第 979 行）
+         * AP 在 trampoline 开启分页后直接通过 movl ap_stack_start, %%esp 加载，
+         * 不再从 trampoline 页动态字段读取 */
+        ap_stack_start.esp = stack_top;
 
         /* 分配逻辑 CPU 号 */
         cpu_id = next_cpu_id;

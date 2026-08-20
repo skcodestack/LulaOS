@@ -614,13 +614,12 @@ ENTRY(ret_from_fork)
  *
  * trampoline 页（物理 0x1000）内数据布局：
  *   代码结束后紧跟 GDT（24字节）+ GDTR（6字节），无 .org 填充
- *   0x1000 + 0x300 : AP 内核栈顶（虚拟地址，4 字节，BSP 写入）
- *   0x1000 + 0x304 : start_secondary 入口地址（4 字节，BSP 写入）
+ *
+ * AP 内核栈顶地址展在全局变量 ap_stack_start.esp 中，
+ * 由 BSP 在发 SIPI 前写入。
  */
 
 #define TRAMP_PAGE_PHYS     0x1000
-#define TRAMP_STACK_OFF     0x300
-#define TRAMP_ENTRY_OFF     0x304
 #define __PAGE_OFFSET_ASM   0xC0000000
 
 .section .trampoline, "ax"
@@ -628,6 +627,10 @@ ENTRY(ret_from_fork)
 ENTRY(smp_trampoline_start)
 
     .code16
+    wbinvd          /* 【缓存一致性】AP 第一条指令：Write Back and INValidate 所有缓存
+                     * 确保 BSP 写入 ap_stack_start.esp 的数据已回写主存
+                     * AP 接下来读 ap_stack_start 必然得到正确值
+                     * 参考 Linux 2.6.20 arch/i386/kernel/trampoline.S 第 50 行 */
     cli
     xorw %ax, %ax
     movw %ax, %ds
@@ -686,9 +689,10 @@ tramp_pm32:
     movw %ax, %gs
     movw %ax, %ss
 
-    /* 从 trampoline 页读取 AP 内核栈顶（虚拟地址，由 BSP 写入）
-     * 分页已开启，必须使用内核虚拟地址（phys + PAGE_OFFSET），否则访问物理地址会触发页错误 */
-    movl (__PAGE_OFFSET_ASM + TRAMP_PAGE_PHYS + TRAMP_STACK_OFF), %esp
+    /* 从全局变量加载 AP 内核栈顶（参考 Linux 2.6.20 head.S 第 225 行 lss stack_start,%%esp）
+     * ap_stack_start.esp 由 BSP 在发 SIPI 前写入，内容为 thread_union 顶部虚拟地址。
+     * 由于首指令已执行 wbinvd 刷缓存，此处必然读到 BSP 写入的正确栈地址 */
+    movl ap_stack_start, %esp
 
     /* 调用 AP C 入口 start_secondary() */
     call SYMBOL_NAME(start_secondary)
