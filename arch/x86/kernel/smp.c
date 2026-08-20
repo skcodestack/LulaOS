@@ -20,6 +20,8 @@
 #include <libs/memcpy.h>
 #include <printk.h>
 #include <mm/mmzone.h>
+#include <mm/slab.h>
+#include <kernel/sched.h>
 
 /* 链接器符号（entry.S / linker.lds 导出），用于定位 GDT/GDTR 在 trampoline 页内的偏移 */
 extern unsigned char tramp_gdt[];
@@ -60,7 +62,6 @@ void smp_init(void)
     unsigned int trampoline_size;
     unsigned char *tramp_page;
     unsigned int *p;
-
     /* ---- 1. 复制 trampoline 代码到物理 0x1000 ---- */
     trampoline_size = (unsigned int)(_trampoline_end - _trampoline_start);
     printk("SMP: trampoline code size = %u bytes\n", trampoline_size);
@@ -101,8 +102,6 @@ void smp_init(void)
     /* ---- 4. 遍历 ACPI LAPIC 列表，启动每个 AP ---- */
     for (i = 0; i < acpi_context.lapic_count; i++) {
         struct acpi_table_lapic *lapic = &acpi_context.lapics[i];
-        struct page *stack_page;
-        unsigned long stack_top;
         int cpu_id;
         int timeout;
 
@@ -112,14 +111,31 @@ void smp_init(void)
         if (!(lapic->flags.enabled))
             continue;
 
-        /* 分配 AP 内核栈（1 页 = 4KB） */
-        stack_page = __alloc_pages(0, 0);
-        if (!stack_page) {
-            printk("SMP: failed to allocate stack for AP %d, skipped\n",
+        /* 为 AP 分配独立的 thread_union（task_struct + 内核栈）
+         *
+         * 参考 Linux 2.6.20 arch/i386/kernel/smpboot.c alloc_idle_task() / fork_idle():
+         *   idle task 需要独立的 task_struct 和内核栈，避免多 CPU 共享上下文
+         *
+         * kmalloc(THREAD_SIZE) 使用 order=1 伙伴系统分配 2 页，
+         * 返回 8KB 对齐地址，满足 current 宏 esp屏蔽需求
+         */
+        union thread_union *tu = (union thread_union *)kmalloc(THREAD_SIZE, GFP_KERNEL);
+        if (!tu) {
+            printk("SMP: failed to allocate thread_union for AP %d, skipped\n",
                    lapic->id);
             continue;
         }
-        stack_top = (unsigned long)stack_page->virtual + PAGE_SIZE;
+
+        struct task_struct *idle = &tu->task;
+        /* 从 BSP init_task 复制基本字段，然后覆盖 AP 特定字段 */
+        *idle = init_task;
+        idle->pid   = 0;           /* idle 进程 pid=0 */
+        idle->flags = 0;           /* 清除 PF_NEVER_STARTED */
+        INIT_LIST_HEAD(&idle->run_list);
+        INIT_LIST_HEAD(&idle->tasks);
+
+        /* AP 内核栈顶 = thread_union 基址 + THREAD_SIZE */
+        unsigned long stack_top = (unsigned long)tu + THREAD_SIZE;
 
         /* 写入 AP 栈顶虚拟地址到 trampoline 偏移 0x300 */
         p = (unsigned int *)(tramp_page + SMP_TRAMP_STACK_OFF);
@@ -145,6 +161,11 @@ void smp_init(void)
         if (cpu_online_map & (1 << cpu_id)) {
             smp_num_cpus++;
             next_cpu_id++;
+            /* 将 AP 的 idle task 注册到对应 CPU 的 runqueue */
+            {
+                extern runqueue_t runqueues[];
+                runqueues[cpu_id].idle = idle;
+            }
             printk("SMP: AP %d (cpu %d) is online\n", lapic->id, cpu_id);
         } else {
             printk("SMP: AP %d (cpu %d) did not respond, timeout\n",
@@ -159,7 +180,7 @@ void smp_init(void)
  * start_secondary - AP 的 C 入口（由 trampoline 调用）
  *
  * 执行环境：分页已开启，GDT/IDT 已加载，内核栈已由 BSP 分配。
- * 此时 current_p[cpu] 指向 init_task（由 sched_init 初始化）。
+ * 此时 current 宏通过 esp & ~0x1FFF 定位，指向内核栈所在的 thread_union.task。
  *
  * 流程：
  *   1. 初始化本 CPU 的 Local APIC（remapping + enable + LVT + Timer + SPIV）
@@ -183,7 +204,11 @@ void start_secondary(void)
     /* 开中断 */
     sti();
 
-    /* idle 循环 */
-    for (;;)
-        safe_halt();
+    /*
+     * 进入 idle 循环
+     * 参考 Linux 2.6.20 arch/i386/kernel/smpboot.c start_secondary():
+     *   cpu_idle() 检查 need_resched 并调用 schedule()
+     * current 宏通过 esp & ~0x1FFF 自动指向本 CPU 的 AP idle task
+     */
+    cpu_idle();
 }

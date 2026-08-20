@@ -70,6 +70,11 @@ SECTIONS
         _eexit_data = .;
     } 
 
+    .data.init_task BLOCK(8K) : AT(ADDR(.data.init_task) - 0xC0000000)
+    {
+        *(.data.init_task)
+    }
+
     .data BLOCK(4K) : AT(ADDR(.data) - 0xC0000000)
     {			 
         _data = .;

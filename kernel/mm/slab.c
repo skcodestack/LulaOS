@@ -10,7 +10,7 @@
  * ==================== 静态缓存描述符池 ====================
  *
  * 内核对象缓存描述符本身也占用内存。
- * 为避免"鸡生蛋"问题，此处预分配静态池，最多容纳 KMEM_CACHE_MAX 个缓存。
+ * 为避免“鸡生蛋”问题，此处预分配静态池，最多容纳 KMEM_CACHE_MAX 个缓存。
  */
 static kmem_cache_t cache_pool[KMEM_CACHE_MAX];
 static unsigned int cache_pool_used = 0;
@@ -20,6 +20,22 @@ static LIST_HEAD(cache_cache);
 
 /* 自旋锁：保护 slab 链表操作（SMP 安全） */
 static spinlock_t slab_lock = SPIN_LOCK_UNLOCKED;
+
+/*
+ * ==================== 通用分配器缓存池 ====================
+ *
+ * 参考 Linux 2.6.20 mm/slab.c malloc_sizes[]
+ * 支持 9 个固定尺寸：32/64/128/256/512/1024/2048/4096/8192 字节
+ * 由 kmem_cache_init() 末尾创建，应用于 kmalloc/kfree
+ */
+kmem_cache_t *malloc_caches[9];
+
+static const unsigned int malloc_sizes[9] = {
+    32, 64, 128, 256, 512, 1024, 2048, 4096, 8192
+};
+
+#define MALLOC_CACHE_COUNT  9
+#define MALLOC_MAX_SIZE     8192   /* kmalloc 支持的最大尺寸 */
 
 /* ==================== 内部工具函数 ==================== */
 
@@ -39,16 +55,18 @@ static void slab_strncpy(char *dst, const char *src, unsigned int maxlen)
  *
  * 内存布局:
  *   [slab_t 描述符 (sizeof(slab_t))] [对齐填充] [obj0][obj1]...[objN-1]
- *   总大小 = PAGE_SIZE
+ *   总大小 = PAGE_SIZE << order
  *
- * 返回: 对象个数，0 表示对象过大无法放入单页
+ * 返回: 对象个数，0 表示对象过大无法放入
  */
 static unsigned int calc_num_objs(unsigned int aligned_size)
 {
+    unsigned int order = (aligned_size > PAGE_SIZE) ? 1 : 0;
+    unsigned int total = PAGE_SIZE << order;
     unsigned int hdr_size    = sizeof(slab_t);
     unsigned int obj_start   = (hdr_size + SLAB_ALIGN_BYTES - 1)
                                & ~(SLAB_ALIGN_BYTES - 1);
-    unsigned int usable      = PAGE_SIZE - obj_start;
+    unsigned int usable      = total - obj_start;
 
     if (aligned_size == 0 || usable < aligned_size)
         return 0;
@@ -78,13 +96,27 @@ static void slab_init_objs(slab_t *slab, unsigned int num, unsigned int aligned_
 }
 
 /*
- * 从伙伴系统申请一页，构建 slab 描述符并挂入 empty 链表
+ * 单个 slab 占用的页面阶数
+ * 一般对象用 order=0（1页），8192B 的缓存需要 order=1（2页）
+ */
+static inline unsigned int cache_order(kmem_cache_t *cache)
+{
+    /* 对象占满整个 slab，需要算出总大小 */
+    /* 简化：对单个 slab 只有 1 个对象的大小缓存，使用 order=1 */
+    if (cache->obj_size > PAGE_SIZE)
+        return 1;
+    return 0;
+}
+
+/*
+ * 从伙伴系统申请页，构建 slab 描述符并挂入 empty 链表
  *
  * 返回: 新 slab 描述符指针，失败返回 NULL
  */
 static slab_t *kmem_cache_grow(kmem_cache_t *cache)
 {
-    struct page *page = __alloc_pages(0, 0);
+    unsigned int order = cache_order(cache);
+    struct page *page = __alloc_pages(order, 0);
     if (!page) {
         printk("[SLAB] OOM: cannot grow cache '%s'\n", cache->name);
         return NULL;
@@ -108,12 +140,13 @@ static slab_t *kmem_cache_grow(kmem_cache_t *cache)
 
     /*
      * 在 page->virtual 存储 slab 描述符指针（用于 kmem_cache_free 反查）
-     * 注：此处与原始 virtual 值相同，语义变更为 slab 反查指针
+     * order=1 时占 2 页，需要标记两页的 virtual 为 slab
      */
-    page->virtual = (void *)slab;
-
-    /* 标记此页为 slab 用途 */
-    PageSetSlab(page);
+    unsigned int n_pages = 1u << order;
+    for (unsigned int i = 0; i < n_pages; i++) {
+        page[i].virtual = (void *)slab;
+        PageSetSlab(&page[i]);
+    }
 
     /* 挂入缓存的 empty 链表 */
     list_add(&slab->list, &cache->empty);
@@ -131,14 +164,18 @@ static void kmem_slab_destroy(kmem_cache_t *cache, slab_t *slab)
     list_del(&slab->list);
     cache->num_slabs--;
 
-    /* 还原 page->virtual 为直接映射地址（供 __free_pages_ok 使用） */
-    void *vaddr         = (void *)((unsigned long)slab & PAGE_MASK);
-    struct page *page   = virt_to_page(vaddr);
-    page->virtual       = vaddr;
+    /* 获取页面首地址 */
+    void *vaddr       = (void *)((unsigned long)slab & PAGE_MASK);
+    struct page *page = virt_to_page(vaddr);
+    unsigned int order = cache_order(cache);
+    unsigned int n_pages = 1u << order;
 
-    /* 清除 slab 标志后归还伙伴系统 */
-    PageClearSlab(page);
-    __free_pages(page, 0);
+    /* 还原两页的 virtual 指针，清除 slab 标志后归还伙伴系统 */
+    for (unsigned int i = 0; i < n_pages; i++) {
+        page[i].virtual = (void *)((unsigned long)vaddr + i * PAGE_SIZE);
+        PageClearSlab(&page[i]);
+    }
+    __free_pages(page, order);
 }
 
 /* ==================== 公共 API 实现 ==================== */
@@ -146,8 +183,9 @@ static void kmem_slab_destroy(kmem_cache_t *cache, slab_t *slab)
 /*
  * kmem_cache_init - 初始化 slab 子系统
  *
- * 仅初始化静态数据结构（全局链表、静态池计数）。
+ * 主要初始化静态数据结构（全局链表、静态池计数）。
  * 必须在 mm_init() 之后调用，以保证伙伴系统已就绪。
+ * 在末尾创建通用大小缓存，供 kmalloc/kfree 使用。
  */
 void kmem_cache_init(void)
 {
@@ -155,6 +193,18 @@ void kmem_cache_init(void)
     cache_pool_used = 0;
     slab_lock       = SPIN_LOCK_UNLOCKED;
     printk("slab: kmem_cache_init complete\n");
+
+    /* 创建通用大小缓存（参考 Linux 2.6.20 malloc_sizes[]） */
+    static const char *names[MALLOC_CACHE_COUNT] = {
+        "kmalloc-32",   "kmalloc-64",   "kmalloc-128",
+        "kmalloc-256",  "kmalloc-512",  "kmalloc-1024",
+        "kmalloc-2048", "kmalloc-4096", "kmalloc-8192"
+    };
+    for (unsigned int i = 0; i < MALLOC_CACHE_COUNT; i++) {
+        malloc_caches[i] = kmem_cache_create(names[i], malloc_sizes[i]);
+        if (!malloc_caches[i])
+            printk("[SLAB] WARNING: failed to create %s cache\n", names[i]);
+    }
 }
 
 /*
@@ -189,7 +239,7 @@ kmem_cache_t *kmem_cache_create(const char *name, unsigned int size)
     /* 计算每页可容纳对象数 */
     unsigned int num = calc_num_objs(aligned_size);
     if (num == 0) {
-        printk("[SLAB] object too large for one page: %u bytes\n", size);
+        printk("[SLAB] object too large for slab (max 8K): %u bytes\n", size);
         return NULL;
     }
 
@@ -337,4 +387,86 @@ void kmem_cache_free(kmem_cache_t *cache, void *obj)
     }
 
     spin_unlock_irqrestore(&slab_lock, flags);
+}
+
+/* ==================== 通用分配器 kmalloc / kfree ==================== */
+
+/*
+ * kmalloc - 通用内存分配
+ *
+ * 从 malloc_caches[] 中选择最小满足 size 的缓存，调用 kmem_cache_alloc 分配。
+ * 对于 size == THREAD_SIZE(8192)：缓存使用 order=1 分配 2 页，
+ *   返回地址为 8KB 对齐（伙伴系统 order=1 保证），满足 current 宏 esp屏蔽需求。
+ *
+ * 参数：
+ *   size  - 需要分配的字节数（最大 MALLOC_MAX_SIZE）
+ *   flags - GFP_KERNEL / GFP_ATOMIC（当前未区分，预留）
+ * 返回：对齐的内存指针，失败返回 NULL
+ */
+void *kmalloc(unsigned int size, unsigned int flags)
+{
+    (void)flags;
+
+    if (size == 0 || size > MALLOC_MAX_SIZE) {
+        printk("[SLAB] kmalloc: invalid size %u\n", size);
+        return NULL;
+    }
+
+    /* 查表找最小满足 size 的缓存 */
+    for (unsigned int i = 0; i < MALLOC_CACHE_COUNT; i++) {
+        if (size <= malloc_sizes[i]) {
+            if (!malloc_caches[i]) {
+                printk("[SLAB] kmalloc: cache[%u] not initialized\n", i);
+                return NULL;
+            }
+            return kmem_cache_alloc(malloc_caches[i]);
+        }
+    }
+
+    printk("[SLAB] kmalloc: no suitable cache for size %u\n", size);
+    return NULL;
+}
+
+/*
+ * kfree - 释放 kmalloc 分配的内存
+ *
+ * 通过 virt_to_page(obj)->virtual 反查 slab 描述符，
+ * 再逐个扫描 malloc_caches[] 找到对应缓存调用 kmem_cache_free。
+ *
+ * 注：此处清楚对象属于哪个缓存需要扫描，
+ *       若性能敏感可将 cache 指针嵌入对象头部优化。
+ */
+void kfree(const void *obj)
+{
+    if (!obj)
+        return;
+
+    struct page *page = virt_to_page(obj);
+    if (!PageSlab(page)) {
+        printk("[SLAB] kfree: %p is not a slab object\n", obj);
+        return;
+    }
+
+    slab_t *slab = (slab_t *)page->virtual;
+
+    /*
+     * 找到对应的 malloc_caches[]
+     * 通过对象指针和 slab->s_mem 内算索引，再由索引利用 aligned_size 反推对应缓存
+     */
+    for (unsigned int i = 0; i < MALLOC_CACHE_COUNT; i++) {
+        kmem_cache_t *cache = malloc_caches[i];
+        if (!cache)
+            continue;
+        /* 判断对象是否和该缓存匹配：对象指针在 slab 对象区内，且偏移整除 aligned_size */
+        if (obj >= (void *)slab->s_mem) {
+            unsigned int off = (unsigned long)obj - (unsigned long)slab->s_mem;
+            if (off % cache->aligned_size == 0 &&
+                off / cache->aligned_size < cache->num) {
+                kmem_cache_free(cache, (void *)obj);
+                return;
+            }
+        }
+    }
+
+    printk("[SLAB] kfree: %p not found in any malloc_cache\n", obj);
 }

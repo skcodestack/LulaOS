@@ -68,6 +68,11 @@ struct kmem_cache {
 
 typedef struct kmem_cache kmem_cache_t;
 
+/* ======================== GFP 分配标志 ======================== */
+
+#define GFP_KERNEL  0x0001  /* 内核普通分配，可能睡眠 */
+#define GFP_ATOMIC  0x0002  /* 原子上下文，不可睡眠 */
+
 /* ======================== 公共 API ======================== */
 
 /* 初始化 slab 子系统（须在 mm_init 之后调用） */
@@ -93,5 +98,30 @@ void *kmem_cache_alloc(kmem_cache_t *cache);
  * 自动通过 virt_to_page + page->virtual 反查 slab 描述符
  */
 void kmem_cache_free(kmem_cache_t *cache, void *obj);
+
+/* ======================== 通用分配器（kmalloc / kfree） ========================
+ *
+ * 参考 Linux 2.6.20 slab_def.h 的 malloc_sizes 设计：
+ *   维护 9 个通用大小缓存：32/64/128/256/512/1024/2048/4096/8192 字节
+ *   kmalloc 从中选取最小满足 size 的缓存分配
+ *   大小 == 8192 时使用 2 阶页面分配（8KB 对齐，满足 THREAD_SIZE 对齐需求）
+ *
+ * malloc_caches[9] 由 kmem_cache_init() 末尾创建
+ */
+extern kmem_cache_t *malloc_caches[9];
+
+/*
+ * kmalloc - 通用内存分配
+ *   size  : 需要分配的字节数
+ *   flags : GFP_KERNEL / GFP_ATOMIC
+ * 返回: 对齐的内存指针，失败返回 NULL
+ */
+void *kmalloc(unsigned int size, unsigned int flags);
+
+/*
+ * kfree - 释放 kmalloc 分配的内存
+ *   obj : kmalloc 返回的指针，NULL 安全
+ */
+void kfree(const void *obj);
 
 #endif /* __SLAB_H__ */

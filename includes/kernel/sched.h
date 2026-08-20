@@ -1,7 +1,9 @@
 /*
  * LulaOS 进程调度器
  *
- * 基于 Linux 2.4 的简单优先级轮转调度器：
+ * 基于 Linux 的简化优先级轮转调度器：
+ *   - thread_union 将 task_struct 与内核栈合并到同一 THREAD_SIZE 块
+ *   - current 宏通过 esp & ~(THREAD_SIZE-1) 直接定位 task_struct
  *   - 静态优先级（priority）越高，基础时间片越大
  *   - 时间片耗尽后移入队列尾部，等待下一轮
  *   - 单 CPU 实现，多核预留 NR_CPUS
@@ -15,6 +17,10 @@
 #include <arch/x86/spinlock.h>
 #include <arch/x86/ptrace.h>
 #include <arch/x86/smp.h>
+
+/* ========== 线程堆大小 ========== */
+#define THREAD_SIZE     8192
+#define THREAD_MASK     (~(THREAD_SIZE - 1))   /* ~0x1FFF，用于 esp 屏蔽 */
 
 /* ========== 任务状态 ========== */
 #define TASK_RUNNING         0   /* 可运行（在 runqueue 中） */
@@ -57,6 +63,20 @@ struct task_struct {
     struct pt_regs     *pt_regs;     /* 内核栈顶保存的寄存器快照 */
 };
 
+/*
+ * thread_union - task_struct 与内核栈合并到同一 8KB 块
+ *
+ * 参考 Linux 2.6.20 include/linux/sched.h union thread_union
+ * 内存布局：
+ *   [低地址] task_struct（占用小部分）
+ *   [... 空闲 ...]
+ *   [高地址] 内核栈（向下增长）
+ */
+union thread_union {
+    struct task_struct task;                         /* 位于 union 起始 */
+    unsigned long stack[THREAD_SIZE / sizeof(long)]; /* 占满整个 8KB */
+};
+
 /* ========== 运行队列 ========== */
 typedef struct {
     spinlock_t          lock;
@@ -65,14 +85,22 @@ typedef struct {
     struct task_struct *idle;        /* 空闲任务 */
 } runqueue_t;
 
-/* ========== 当前进程（per-CPU 数组，索引 = 逻辑 CPU 号）========== */
-extern struct task_struct init_task;
+/* ========== 当前进程（current 宏）========== */
 
-/* per-CPU current 指针数组：内联汇编需要取地址，不能用宏直接替换 */
-extern struct task_struct *current_p[NR_CPUS];
-
-/* 当前 CPU 的 current 任务指针：通过 smp_processor_id() 索引 */
-#define current  (current_p[smp_processor_id()])
+/*
+ * get_current() - 通过 esp & ~(THREAD_SIZE-1) 定位当前 task_struct
+ *
+ * 原理：每个进程的 task_struct 在 thread_union 起始，
+ *   该块 8KB 对齐，因此 esp 屏蔽低 13 位可得到基址。
+ * 参考 Linux 2.6.20 include/asm-i386/thread_info.h current_thread_info()
+ */
+static inline struct task_struct *get_current(void)
+{
+    struct task_struct *cur;
+    __asm__("andl %%esp, %0" : "=r"(cur) : "0"(~(THREAD_SIZE - 1)));
+    return cur;
+}
+#define current  get_current()
 
 /* ========== 初始化宏 ========== */
 #define INIT_TASK(tsk) { \
@@ -86,14 +114,19 @@ extern struct task_struct *current_p[NR_CPUS];
     .run_list    = { &(tsk).run_list, &(tsk).run_list }, \
     .tasks       = { &(tsk).tasks,  &(tsk).tasks  }, \
     .thread      = INIT_THREAD, \
-    .flags       = PF_NEVER_STARTED, \
+    .flags       = 0, \
     .pt_regs     = (void *)0 \
 }
+
+/* BSP 的初始 thread_union（.data.init_task 节，8KB 对齐） */
+extern union thread_union init_thread_union;
+#define init_task  (init_thread_union.task)
 
 /* ========== 调度器 API ========== */
 void sched_init(void);
 void schedule(void);
 void scheduler_tick(void);
+void cpu_idle(void);
 
 /* 进程创建 */
 int  kernel_thread(int (*fn)(void *), void *arg, unsigned long flags);

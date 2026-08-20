@@ -39,7 +39,23 @@ RESTORE_ALL:
 
 
 ENTRY(ret_from_intr)
-    jmp	RESTORE_ALL
+    /*
+     * 中断返回前检查 need_resched
+     *
+     * 参考 Linux 2.6.20 arch/i386/kernel/entry.S ret_from_intr:
+     *   检查 TIF_NEED_RESCHED 标志，若置位则调用 schedule()
+     *
+     * current 宏通过 esp & ~(THREAD_SIZE-1) 定位 task_struct
+     * need_resched 在 task_struct 偏移 16 (0x10)
+     */
+    movl    %esp, %eax
+    andl    $~(8192-1), %eax        /* eax = &task_struct (esp & ~0x1FFF) */
+    cmpl    $0, 16(%eax)            /* need_resched 偏移 16 */
+    jnz     ret_from_intr_resched
+    jmp     RESTORE_ALL
+ret_from_intr_resched:
+    call    SYMBOL_NAME(schedule)
+    jmp     RESTORE_ALL
 
 /* interrupt warpper function */
 
@@ -472,13 +488,11 @@ ENTRY(system_call)
 
 /* ====== 进程上下文切换 ======
  *
- * void __switch_to(struct task_struct *prev, struct task_struct *next,
- *                  struct task_struct **current_p_addr)
+ * void __switch_to(struct task_struct *prev, struct task_struct *next)
  *
- * 调用方（schedule）已将 prev / next / current_p_addr 依次压栈：
- *   [esp+12] = prev           （先压）
- *   [esp+8]  = next           （后压）
- *   [esp+4]  = current_p_addr （最后压）
+ * 调用方（schedule）已将 prev / next 依次压栈：
+ *   [esp+8]  = prev           （先压）
+ *   [esp+4]  = next           （后压）
  *   [esp]    = 返回地址（由 call __switch_to 压入）
  *
  * 上下文保存（prev）：
@@ -491,16 +505,17 @@ ENTRY(system_call)
  *   5. movl next->thread.esp → %esp
  *   6. popl %edi/%esi/%ebx/%ebp
  *   7. popfl
- *   8. 更新 per-CPU current_p[cpu] = next
- *   9. 加载 next 的页目录（CR3）
- *  10. 若 PF_NEVER_STARTED → jmp ret_from_fork
- *  11. ret → 弹出 next->thread.eip → 跳转到 schedule() 调用点
+ *   8. 加载 next 的页目录（CR3）
+ *   9. 若 PF_NEVER_STARTED → jmp ret_from_fork
+ *  10. ret → 弹出 next->thread.eip → 跳转到 schedule() 调用点
  *
- * task_struct 偏移（十进制）：
- *   thread      = 32 (0x20)
- *   flags       = 68 (0x44)
- * thread_struct 偏移：
- *   esp=0  eip=4  pgd=28(0x1C)
+ * current 宏通过 esp & ~0x1FFF 自动更新，无需显式写入。
+ *
+ * task_struct 字段偏移（十进制）：
+ *   thread.esp  = 56  (0x38)
+ *   thread.eip  = 60  (0x3C)
+ *   thread.pgd  = 84  (0x54)
+ *   flags       = 92  (0x5C)
  */
 ENTRY(__switch_to)
     /* 保存 eflags */
@@ -513,24 +528,23 @@ ENTRY(__switch_to)
     pushl %edi
 
     /* 保存当前栈指针到 prev->thread.esp
-     * prev 参数在 push 前位于 [esp+8]，5次 push 后偏移 +20
-     * 即 [esp+20] = prev */
-    movl 20(%esp), %eax       /* eax = prev */
-    movl %esp, 32(%eax)       /* prev->thread.esp (task offset 0x20 + thread.esp offset 0) */
+     * prev 参数在 5次 push 前位于 [esp+8]，5次 push 后偏移 +20+8=注意：
+     *   push 前：[esp+4]=next, [esp+8]=prev
+     *   push fl：+4； push ebp：+4； push ebx：+4； push esi：+4； push edi：+4
+     *   共 +20，加上 call 帧的返回地址 +4，共 +24 前 push 前橈位匹配
+     *   实际：[esp+0]=edi, [esp+4]=esi, [esp+8]=ebx, [esp+12]=ebp,
+     *           [esp+16]=eflags, [esp+20]=ret_addr, [esp+24]=prev, [esp+28]=next
+     */
+    movl 24(%esp), %eax       /* eax = prev */
+    movl %esp, 56(%eax)       /* prev->thread.esp (offset 0x38) */
 
-    /* 保存返回地址到 prev->thread.eip
-     * 返回地址在 5次 push 后位于 [esp+24] */
-    movl 24(%esp), %ecx
-    movl %ecx, 36(%eax)       /* prev->thread.eip (task offset 0x20 + thread.eip offset 4) */
+    /* 保存返回地址到 prev->thread.eip */
+    movl 20(%esp), %ecx       /* ecx = ret_addr */
+    movl %ecx, 60(%eax)       /* prev->thread.eip (offset 0x3C) */
 
     /* 恢复 next 的栈指针 */
     movl 28(%esp), %edx       /* edx = next */
-
-    /* 在 esp 切换前保存 current_p_addr 到 %eax
-     * （不能用 %esi/%edi/%ebx/%ebp，它们会被 popl 覆盖） */
-    movl 24(%esp), %eax       /* eax = current_p_addr */
-
-    movl 32(%edx), %esp       /* %esp = next->thread.esp */
+    movl 56(%edx), %esp       /* %esp = next->thread.esp */
 
     /* 恢复 callee-saved 寄存器 */
     popl %edi
@@ -541,19 +555,20 @@ ENTRY(__switch_to)
     /* 恢复 eflags */
     popfl
 
-    /* 更新 per-CPU current_p[cpu] = next
-     * %eax 暂存的 current_p_addr 不受 popl/popfl 影响 */
-    movl %edx, (%eax)         /* *current_p_addr = next */
+    /*
+     * current 宏通过 esp & ~0x1FFF 自动更新，无需显式写入。
+     * 切换到 next 的栈后，get_current() 將返回 next.
+     */
 
     /* 切换 CR3 页目录（仅当 next->thread.pgd != 0 时） */
-    movl 60(%edx), %ecx       /* next->thread.pgd (task 0x20 + thread.pgd 0x1C = 60) */
+    movl 84(%edx), %ecx       /* next->thread.pgd (offset 0x54) */
     testl %ecx, %ecx
     jz 1f
     movl %ecx, %cr3
 1:
 
     /* 若任务从未启动（PF_NEVER_STARTED），跳到 ret_from_fork */
-    testl $0x00000001, 68(%edx)  /* next->flags (task offset 0x44 = 68) */
+    testl $0x00000001, 92(%edx)  /* next->flags (offset 0x5C) */
     jz 2f
     jmp SYMBOL_NAME(ret_from_fork)
 2:
@@ -569,19 +584,24 @@ ENTRY(__switch_to)
  *   - kernel_thread: eip = kernel_thread_helper, esp 指向 [fn, arg]
  *   - sys_fork:      eip = ret_from_intr, esp 指向 pt_regs
  *
- * 实现：读取 current->thread.eip，清除 PF_NEVER_STARTED，然后跳转。
+ * 实现：通过 esp & ~0x1FFF 获取 current，
+ *   清除 PF_NEVER_STARTED，然后跳转到 thread.eip。
+ *
+ * task_struct 偏移：
+ *   thread.eip  = 60  (0x3C)
+ *   flags       = 92  (0x5C)
  */
 ENTRY(ret_from_fork)
-    /* 获取当前 CPU 的 current 指针（per-CPU） */
-    call SYMBOL_NAME(smp_processor_id)
-    movl SYMBOL_NAME(current_p)(,%eax,4), %eax  /* eax = current_p[cpu] */
+    /* 通过 esp & ~0x1FFF 直接获取 current task_struct */
+    movl    %esp, %eax
+    andl    $~(8192-1), %eax      /* eax = current (esp & ~0x1FFF) */
 
     /* 清除 PF_NEVER_STARTED 标志 */
-    andl $~0x00000001, 68(%eax)  /* current->flags (task offset 0x44 = 68) */
+    andl    $~0x00000001, 92(%eax) /* current->flags (offset 0x5C) */
 
     /* 跳转到 thread.eip 保存的地址（kernel_thread_helper 或 ret_from_intr） */
-    movl 36(%eax), %ecx       /* current->thread.eip (task 0x20 + thread.eip 0x04 = 36) */
-    jmp *%ecx
+    movl    60(%eax), %ecx         /* current->thread.eip (offset 0x3C) */
+    jmp     *%ecx
 
 
 /* ====== SMP AP Trampoline ======
