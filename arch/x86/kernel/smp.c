@@ -141,9 +141,20 @@ void smp_init(void)
         unsigned long stack_top = (unsigned long)tu + THREAD_SIZE;
 
         /* 写入 AP 栈顶地址到全局变量（参考 Linux 2.6.20 smpboot.c 第 979 行）
-         * AP 在 trampoline 开启分页后直接通过 movl ap_stack_start, %%esp 加载，
-         * 不再从 trampoline 页动态字段读取 */
+         * AP 在 trampoline 开启分页后直接通过 movl ap_stack_start, %%esp 加载 */
         ap_stack_start.esp = stack_top;
+
+        /* 【关键】同步设置 idle->thread.esp，供调度器 __switch_to 切换回 idle 时恢复
+         * 若不设置，__switch_to 从 thread.esp=0（INIT_THREAD 初始值）恢复 ESP，
+         * 导致下次中断到来时 ESP=0 → push 写到 0xFFFFFFFC → #PF → Triple Fault
+         * ex */
+        idle->thread.esp = stack_top;
+
+        /* 【关键】BSP 刷缓存，确保 ap_stack_start.esp 回写主存
+         * BSP 写完后数据在 L1 cache 中，若不刷新，AP 从主存读到的是旧值 0。
+         * wbinvd 强制把 BSP 所有 dirty cache line 回写并作废，
+         * 之后 AP 读 ap_stack_start 必然从主存获得正确值。 */
+        __asm__ volatile ("wbinvd" ::: "memory");
 
         /* 分配逻辑 CPU 号 */
         cpu_id = next_cpu_id;

@@ -672,11 +672,15 @@ tramp_pm32:
     lgdt (_gdt_pointer - __PAGE_OFFSET_ASM)
     lidt (_idt_pointer - __PAGE_OFFSET_ASM)
 
-    /* 开启分页（所有 CPU 共享 swapper_pg_dir） */
+    /* 开启分页（所有 CPU 共享 swapper_pg_dir）
+     * 同时清除 CR0.CD（bit 30）和 CR0.NW（bit 29）
+     * AP 复位后 CR0=0x60000010（CD=NW=1），若不清除，开启分页后
+     * 缓存仍然禁用，导致调试器显示 CR0.CD=1 */
     movl $(swapper_pg_dir - __PAGE_OFFSET_ASM), %eax
     movl %eax, %cr3
     movl %cr0, %eax
-    orl  $0x80000000, %eax
+    orl  $0x80000000, %eax     /* 设置 PG（bit 31）*/
+    andl $0x9FFFFFFF, %eax     /* 清除 CD（bit 30）和 NW（bit 29）*/
     movl %eax, %cr0
 
     /* 远跳转确保 CS = __KERNEL_CS（使用虚拟地址，分页已开启） */
