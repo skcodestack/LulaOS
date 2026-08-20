@@ -29,6 +29,12 @@ extern unsigned char tramp_gdtr[];
 
 int smp_num_cpus = 1;           /* BSP 始终算一个 */
 int cpu_online_map = 1;         /* bit 0 = BSP 在线 */
+
+/* BSP ↔ AP 握手变量（参考 Linux 2.6.20 smpboot.c 第 89-90 行）
+ * volatile 防止编译器优化掉轮询循环中的内存读取 */
+volatile int cpu_callout_map = 0;  /* BSP → AP：BSP 发完 IPI 后置位 */
+volatile int cpu_callin_map  = 0;  /* AP → BSP：AP 完成初始化后置位 */
+
 int apicid_to_cpu[256];         /* APIC ID → 逻辑 CPU 号 */
 
 /* 下一个可用逻辑 CPU 号 */
@@ -148,17 +154,26 @@ void smp_init(void)
         printk("SMP: booting AP %d (cpu %d, stack %p)\n",
                lapic->id, cpu_id, (void *)stack_top);
 
-        /* 发送 INIT-SIPI-SIPI */
-        send_startup_ipi(lapic->id, SMP_TRAMPOLINE_VECTOR);
+        /* 发送 INIT-SIPI-SIPI
+         * 参考 Linux 2.6.20 do_boot_cpu() 第 989-1000 行:
+         *   清除 callin/callout → 发送 IPI → 设 callout 通知 AP */
+        cpu_callout_map = 0;
+        cpu_callin_map  = 0;
 
-        /* 等待 AP 上线（轮询 cpu_online_map，最多 ~100ms） */
-        timeout = 100;
-        while (!(cpu_online_map & (1 << cpu_id)) && timeout > 0) {
+        send_startup_ipi(lapic->id, SMP_TRAMPOLINE_VECTOR, cpu_id);
+
+        /* BSP 通知 AP：可以继续初始化（参考 Linux cpu_set(cpu, cpu_callout_map)） */
+        cpu_callout_map |= (1 << cpu_id);
+
+        /* 等待 AP 完成初始化（参考 Linux 第 1013-1017 行的 ~5s 超时轮询）
+         * AP 在 start_secondary() 中完成 APIC 初始化后会设 callin_map */
+        timeout = 5000;
+        while (!(cpu_callin_map & (1 << cpu_id)) && timeout > 0) {
             udelay(1000);   /* 1ms */
             timeout--;
         }
 
-        if (cpu_online_map & (1 << cpu_id)) {
+        if (cpu_callin_map & (1 << cpu_id)) {
             smp_num_cpus++;
             next_cpu_id++;
             /* 将 AP 的 idle task 注册到对应 CPU 的 runqueue */
@@ -179,24 +194,45 @@ void smp_init(void)
 /*
  * start_secondary - AP 的 C 入口（由 trampoline 调用）
  *
+ * 参考 Linux 2.6.20 start_secondary() (smpboot.c 第 541-588 行)
+ *             + smp_callin()   (smpboot.c 第 367-454 行)
+ *
  * 执行环境：分页已开启，GDT/IDT 已加载，内核栈已由 BSP 分配。
  * 此时 current 宏通过 esp & ~0x1FFF 定位，指向内核栈所在的 thread_union.task。
  *
- * 流程：
- *   1. 初始化本 CPU 的 Local APIC（remapping + enable + LVT + Timer + SPIV）
- *   2. 开中断
- *   3. 标记 CPU 在线
- *   4. 进入 idle 循环
+ * 流程（参考 Linux）：
+ *   1. 尽早设 cpu_online_map（阻止 BSP 发送第二个 SIPI）
+ *   2. 等待 cpu_callout_map（BSP 通知可以继续）
+ *   3. 初始化 Local APIC / Timer
+ *   4. 设 cpu_callin_map（通知 BSP 初始化完成）
+ *   5. 开中断，进入 idle 循环
  */
 void start_secondary(void)
 {
     int cpu = smp_processor_id();
 
-    /* 初始化本 CPU 的 Local APIC */
+    /* 【关键】尽早标记在线，阻止 BSP 发送第二个 SIPI
+     * 参考问题分析：若 BSP 在 AP 未完成初始化时发送 SIPI2，
+     * 会将 AP 强制复位回实模式，破坏栈/分页状态 → Triple Fault
+     * 在 local_apic_init_ap() 之前设此标志，使 send_startup_ipi()
+     * 中的 cpu_online_map 检查能够生效，跳过 SIPI2 */
+    cpu_online_map |= (1 << cpu);
+
+    /* 等待 BSP 的 callout 信号
+     * 参考 Linux smp_callin() 第 404-411 行:
+     *   AP 在收到 callout 之前不做任何初始化，
+     *   确保 BSP 已完成 IPI 发送并准备好接受 AP 的响应 */
+    while (!(cpu_callout_map & (1 << cpu)))
+        ;
+
+    /* 初始化本 CPU 的 Local APIC
+     * 参考 Linux smp_callin() 第 428 行 setup_local_APIC() */
     local_apic_init_ap();
 
-    /* 标记在线 */
-    cpu_online_map |= (1 << cpu);
+    /* 通知 BSP：AP 初始化完成
+     * 参考 Linux smp_callin() 第 447 行 cpu_set(cpuid, cpu_callin_map)
+     * BSP 在 smp_init() 中轮询此标志，见到后才标记 AP 成功 */
+    cpu_callin_map |= (1 << cpu);
 
     printk("SMP: cpu %d is up (APIC ID %d)\n",
            cpu, GET_APIC_ID(apic_read(APIC_ID)));
@@ -206,8 +242,8 @@ void start_secondary(void)
 
     /*
      * 进入 idle 循环
-     * 参考 Linux 2.6.20 arch/i386/kernel/smpboot.c start_secondary():
-     *   cpu_idle() 检查 need_resched 并调用 schedule()
+     * 参考 Linux 2.6.20 start_secondary() 第 586-587 行:
+     *   wmb(); cpu_idle();
      * current 宏通过 esp & ~0x1FFF 自动指向本 CPU 的 AP idle task
      */
     cpu_idle();

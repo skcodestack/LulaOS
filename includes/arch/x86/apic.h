@@ -188,7 +188,7 @@ void do_apic_error_interrupt(struct pt_regs *regs, long error_code);
 
 /* IPI / SMP 启动 */
 void send_ipi(int apic_id, int vector);
-void send_startup_ipi(int apic_id, unsigned int startup_page);
+void send_startup_ipi(int apic_id, unsigned int startup_page, int cpu_id);
 
 /* 微秒延迟（基于 PIT Channel 2 轮询） */
 void udelay(unsigned int us);

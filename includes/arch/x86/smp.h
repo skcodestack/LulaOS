@@ -32,6 +32,12 @@
 extern int  smp_num_cpus;       /* 在线 CPU 总数 */
 extern int  cpu_online_map;     /* 在线 CPU 位图（bit N = cpu N 在线） */
 
+/* BSP ↔ AP 握手机制（参考 Linux 2.6.20 smpboot.c 第 89-90 行）：
+ *   callout: BSP 发完 IPI 后置位，AP 看到后才开始初始化
+ *   callin:  AP 完成初始化后置位，BSP 轮询此标志确认 AP 就绪 */
+extern volatile int cpu_callout_map;
+extern volatile int cpu_callin_map;
+
 /* APIC ID → 逻辑 CPU 号映射（由 smp_init 填充） */
 extern int  apicid_to_cpu[256];
 

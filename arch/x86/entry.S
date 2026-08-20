@@ -686,8 +686,9 @@ tramp_pm32:
     movw %ax, %gs
     movw %ax, %ss
 
-    /* 从 trampoline 页读取 AP 内核栈顶（虚拟地址，由 BSP 写入） */
-    movl (TRAMP_PAGE_PHYS + TRAMP_STACK_OFF), %esp
+    /* 从 trampoline 页读取 AP 内核栈顶（虚拟地址，由 BSP 写入）
+     * 分页已开启，必须使用内核虚拟地址（phys + PAGE_OFFSET），否则访问物理地址会触发页错误 */
+    movl (__PAGE_OFFSET_ASM + TRAMP_PAGE_PHYS + TRAMP_STACK_OFF), %esp
 
     /* 调用 AP C 入口 start_secondary() */
     call SYMBOL_NAME(start_secondary)

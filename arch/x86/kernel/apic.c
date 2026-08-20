@@ -438,16 +438,16 @@ static void send_sipi(int apic_id, unsigned int vector){
 /*
  * send_startup_ipi - 标准 SMP 启动流程（INIT-SIPI-SIPI）
  *
- * 1. INIT IPI（复位目标 AP，使其进入等待 SIPI 状态）
- * 2. 等待 10ms
- * 3. SIPI（告知 AP 入口物理页地址）
- * 4. 等待 200us
- * 5. 再次发送 SIPI（若 AP 未响应，重新唤醒）
+ * 参考 Linux 2.6.20 wakeup_secondary_cpu() (smpboot.c 第 844-891 行):
+ *   SIPI 循环中检查 AP 是否已响应，若第一个 SIPI 成功则跳过第二个，
+ *   避免 AP 已在执行 C 代码时被强制复位 → Triple Fault。
  *
- * @apic_id:     目标 AP 的 LAPIC ID
+ * @apic_id:      目标 AP 的 LAPIC ID
  * @startup_page: AP 入口物理地址所在页号（= 物理地址 / 0x1000）
+ * @cpu_id:       逻辑 CPU 号（用于检查 cpu_online_map）
  */
-void send_startup_ipi(int apic_id, unsigned int startup_page){
+extern int cpu_online_map;
+void send_startup_ipi(int apic_id, unsigned int startup_page, int cpu_id){
     /* Step 1: INIT IPI - 复位目标 AP */
     send_init_ipi(apic_id);
     printk("SMP: INIT IPI sent to AP %d\n", apic_id);
@@ -459,10 +459,17 @@ void send_startup_ipi(int apic_id, unsigned int startup_page){
     send_sipi(apic_id, startup_page);
     printk("SMP: SIPI (vector=%#x) sent to AP %d\n", startup_page, apic_id);
 
-    /* Step 4: 等待 200us */
-    udelay(200);
+    /* Step 4: 等待 AP 响应
+     * AP 一旦进入 start_secondary() 会立即设 cpu_online_map，
+     * 若此标志已置位，说明第一个 SIPI 成功，绝不能再发第二个 SIPI */
+    udelay(300);
 
-    /* Step 5: 再次发送 SIPI（若 AP 未响应） */
+    if (cpu_online_map & (1 << cpu_id)) {
+        printk("SMP: AP %d responded to first SIPI, skip second\n", apic_id);
+        return;
+    }
+
+    /* AP 未响应，发送第二次 SIPI（参考 Linux 第 884-891 行重试逻辑） */
     send_sipi(apic_id, startup_page);
     printk("SMP: second SIPI sent to AP %d\n", apic_id);
 }
