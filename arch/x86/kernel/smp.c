@@ -150,15 +150,33 @@ void smp_init(void)
          * ex */
         idle->thread.esp = stack_top;
 
-        /* 【关键】BSP 刷缓存，确保 ap_stack_start.esp 回写主存
-         * BSP 写完后数据在 L1 cache 中，若不刷新，AP 从主存读到的是旧值 0。
-         * wbinvd 强制把 BSP 所有 dirty cache line 回写并作废，
-         * 之后 AP 读 ap_stack_start 必然从主存获得正确值。 */
-        __asm__ volatile ("wbinvd" ::: "memory");
-
-        /* 分配逻辑 CPU 号 */
+        /* 分配逻辑 CPU 号（必须在 wbinvd 之前，为 rq->idle 注册提供 cpu_id） */
         cpu_id = next_cpu_id;
         apicid_to_cpu[lapic->id] = cpu_id;
+
+        /*
+         * 【关键】在 SIPI 之前注册 AP 的 idle task！
+         *
+         * AP 在 start_secondary() 中执行 setup_local_apic() 后，
+         * APIC Timer 即开始工作。若此时 runqueues[cpu_id].idle
+         * 仍是 init_task（sched_init 默认值），scheduler_tick() 中
+         * p == rq->idle 判断会失败（AP_idle ≠ init_task），导致错误
+         * 递减 AP idle 的 counter，最终触发 schedule()。
+         *
+         * 移到 wbinvd 之前，与 ap_stack_start.esp 一起刷到主存，
+         * 确保 AP 的第一次 Timer 中断能看到正确的 rq->idle。
+         */
+        {
+            extern runqueue_t runqueues[];
+            runqueues[cpu_id].idle = idle;
+        }
+
+        /* 【关键】BSP 刷缓存，确保以下数据回写主存：
+         *   1. ap_stack_start.esp：AP trampoline 需要加载
+         *   2. runqueues[cpu_id].idle：AP 的 Timer 中断会使用
+         * wbinvd 强制把 BSP 所有 dirty cache line 回写并作废，
+         * 之后 AP 读这些变量必然从主存获得正确值。 */
+        __asm__ volatile ("wbinvd" ::: "memory");
 
         printk("SMP: booting AP %d (cpu %d, stack %p)\n",
                lapic->id, cpu_id, (void *)stack_top);
@@ -185,11 +203,6 @@ void smp_init(void)
         if (cpu_callin_map & (1 << cpu_id)) {
             smp_num_cpus++;
             next_cpu_id++;
-            /* 将 AP 的 idle task 注册到对应 CPU 的 runqueue */
-            {
-                extern runqueue_t runqueues[];
-                runqueues[cpu_id].idle = idle;
-            }
             printk("SMP: AP %d (cpu %d) is online\n", lapic->id, cpu_id);
         } else {
             printk("SMP: AP %d (cpu %d) did not respond, timeout\n",
