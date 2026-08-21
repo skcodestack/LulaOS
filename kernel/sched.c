@@ -68,8 +68,8 @@ extern void __switch_to(void);
 extern void ret_from_fork(void);
 extern void ret_from_intr(void);
 
-/* 新创建的内核线程 helper */
-static void kernel_thread_helper(void);
+/* 新创建的内核线程 helper（定义在 arch/x86/kernel/process.S） */
+extern void kernel_thread_helper(void);
 
 /* ========== 初始化 ========== */
 
@@ -429,35 +429,6 @@ int kernel_thread(int (*fn)(void *), void *arg, unsigned long flags)
            p->pid, fn, target_cpu,
            (flags & KT_BALANCE) ? " (balanced)" : "");
     return p->pid;
-}
-
-/*
- * kernel_thread_helper - 内核线程的统一入口
- *
- * __switch_to 检测 PF_NEVER_STARTED 后跳转到 ret_from_fork，
- * ret_from_fork 清除标志后跳转到 thread.eip（即此函数）。
- * 此时栈上（由 kernel_thread 构造）：
- *   [esp+0] = fn
- *   [esp+4] = arg
- */
-static void kernel_thread_helper(void)
-{
-    /* 开中断：新线程从未执行过 sti，需要显式开中断 */
-    sti();
-
-    {
-        unsigned long *sp;
-        int (*fn)(void *);
-        void *arg;
-
-        __asm__ volatile("movl %%esp, %0" : "=r"(sp));
-        fn  = (int (*)(void *))sp[0];
-        arg = (void *)sp[1];
-        fn(arg);
-    }
-
-    /* fn 返回后退出 */
-    do_exit(0);
 }
 
 /* ========== 进程退出 / 睡眠 ========== */

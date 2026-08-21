@@ -101,8 +101,10 @@ static inline pte_t pte_mkwrite(pte_t pte)	{ (pte).pte_low |= _PAGE_RW; return p
 /// mm is the mm_struct
 #define pgd_offset(mm, address) ((mm)->pgd+pgd_index(address))
 
-#define pte_offset(dir, address) ((pte_t *) pgd_page(*(dir)) + \
-			pte_index(address))
+static inline pte_t *pte_offset(pgd_t *dir, unsigned long address)
+{
+	return (pte_t *)pgd_page(*dir) + pte_index(address);
+}
 
 
 #define mk_pte_phys(physpage, pgprot)	__mk_pte((physpage) >> PAGE_SHIFT, pgprot)
