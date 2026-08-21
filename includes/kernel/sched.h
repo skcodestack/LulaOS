@@ -38,6 +38,9 @@
 /* ========== PF 标志 ========== */
 #define PF_NEVER_STARTED  0x00000001  /* 任务从未被调度过 */
 
+/* ========== kernel_thread 标志 ========== */
+#define KT_BALANCE  0x00000001  /* 负载均衡：将新线程加入最空闲 CPU 的运行队列 */
+
 /* ========== 进程描述符 ========== */
 struct task_struct {
     /* ---- 调度信息 ---- */
@@ -130,11 +133,14 @@ void cpu_idle(void);
 
 /* 进程创建 */
 int  kernel_thread(int (*fn)(void *), void *arg, unsigned long flags);
-int  sys_fork(struct pt_regs *regs);
+int  sys_fork(struct pt_regs *regs, unsigned long fork_flags);
 
 /* 进程退出/睡眠 */
 void do_exit(long code);
 void interruptible_sleep(void);
+
+/* 负载均衡：扫描所有在线 CPU，返回运行队列最空闲的逻辑 CPU 号 */
+int find_idlest_cpu(void);
 
 /* ========== 辅助函数 ========== */
 
@@ -153,6 +159,25 @@ static inline void add_task_to_runqueue(struct task_struct *p)
      */
     if (current == rq->idle)
         rq->idle->need_resched = 1;
+}
+
+/*
+ * add_task_to_cpu - 将任务加入指定 CPU 的运行队列（负载均衡用）
+ *
+ * 与 add_task_to_runqueue() 不同，此函数接受目标 CPU 号，
+ * 供 sys_fork() / kernel_thread() 在 find_idlest_cpu() 选中后使用。
+ * 若目标 CPU 正在运行 idle 任务，直接写 rq->idle->need_resched = 1
+ * 唤醒该 CPU（跨 CPU 写 volatile 变量是安全的原子操作）。
+ */
+static inline void add_task_to_cpu(struct task_struct *p, int cpu)
+{
+    extern runqueue_t runqueues[NR_CPUS];
+    runqueue_t *rq = &runqueues[cpu];
+    list_add_tail(&p->run_list, &rq->queue);
+    rq->nr_running++;
+
+    /* 若目标 CPU 处于 idle 循环，唤醒它以便调度新任务 */
+    rq->idle->need_resched = 1;
 }
 
 /* 将任务从运行队列移除 - per-CPU：从当前 CPU 的 runqueue 移除 */

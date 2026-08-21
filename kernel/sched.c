@@ -96,6 +96,33 @@ void sched_init(void)
     printk("sched: scheduler initialized (idle pid=%d)\n", init_task.pid);
 }
 
+/* ========== 负载均衡 ========== */
+
+/*
+ * find_idlest_cpu - 扫描所有在线 CPU，返回运行队列任务数最少的逻辑 CPU 号
+ *
+ * 遍历 cpu_online_map 中每个在线 CPU，比较 runqueues[i].nr_running，
+ * 取最小者。相等时优先选当前 CPU（cache 熟热，减少迁移开销）。
+ * 若只有 BSP 在线，直接返回 0。
+ */
+int find_idlest_cpu(void)
+{
+    int i, best_cpu, min_running;
+
+    best_cpu   = smp_processor_id();
+    min_running = (int)runqueues[best_cpu].nr_running;
+
+    for (i = 0; i < NR_CPUS; i++) {
+        if (!(cpu_online_map & (1 << i)))
+            continue;
+        if ((int)runqueues[i].nr_running < min_running) {
+            min_running = (int)runqueues[i].nr_running;
+            best_cpu   = i;
+        }
+    }
+    return best_cpu;
+}
+
 /* ========== 核心调度 ========== */
 
 /*
@@ -236,17 +263,22 @@ void cpu_idle(void)
 /*
  * sys_fork - 创建子进程（完整地址空间复制）
  *
+ * flags 参数：
+ *   0             → 加入当前 CPU 的运行队列（默认）
+ *   KT_BALANCE    → 负载均衡，选择最空闲的 CPU 加入运行队列
+ *
  * 参考 Linux 2.6.20 kernel/fork.c dup_task_struct + copy_thread：
  *   - 使用 kmalloc(THREAD_SIZE) 分配 8KB 对齐的 thread_union
  *   - task_struct 在低地址（union 起始），内核栈在高地址向下增长
  *   - 这样 current 宏（esp & ~0x1FFF）对新进程天然有效
  */
-int sys_fork(struct pt_regs *regs)
+int sys_fork(struct pt_regs *regs, unsigned long fork_flags)
 {
     union thread_union *tu;
     struct task_struct *p;
     unsigned long stack_base;
     unsigned long flags;
+    int target_cpu;
 
     /*
      * 分配 THREAD_SIZE(8KB) 对齐的 thread_union
@@ -303,20 +335,32 @@ int sys_fork(struct pt_regs *regs)
     p->thread.eip = (unsigned long)ret_from_intr;
     p->thread.esp = (unsigned long)p->pt_regs;
 
-    /* 标记为可运行，加入运行队列 */
+    /* 根据 fork_flags 选择目标 CPU：
+     *   KT_BALANCE → 扫描所有在线 CPU，选最空闲的
+     *   其他情况   → 当前 CPU（低延迟，cache 熟热）
+     */
+    target_cpu = (fork_flags & KT_BALANCE) ? find_idlest_cpu()
+                                           : smp_processor_id();
+
     p->state = TASK_RUNNING;
 
     local_irq_save(flags);
-    add_task_to_runqueue(p);
+    add_task_to_cpu(p, target_cpu);
     list_add(&p->tasks, &task_list);
     local_irq_restore(flags);
 
-    printk("sched: fork pid=%d from pid=%d\n", p->pid, current->pid);
+    printk("sched: fork pid=%d from pid=%d -> cpu %d%s\n",
+           p->pid, current->pid, target_cpu,
+           (fork_flags & KT_BALANCE) ? " (balanced)" : "");
     return p->pid;
 }
 
 /*
  * kernel_thread - 创建内核线程
+ *
+ * flags 参数：
+ *   0             → 加入当前 CPU 的运行队列（默认）
+ *   KT_BALANCE    → 负载均衡，选择最空闲的 CPU 加入运行队列
  *
  * 参考 Linux 2.6.20 arch/i386/kernel/process.c kernel_thread + copy_thread：
  *   - 同 sys_fork 使用 kmalloc(THREAD_SIZE) 分配 thread_union
@@ -329,6 +373,7 @@ int kernel_thread(int (*fn)(void *), void *arg, unsigned long flags)
     unsigned long stack_base;
     unsigned long *sp;
     unsigned long irq_flags;
+    int target_cpu;
 
     tu = (union thread_union *)kmalloc(THREAD_SIZE, GFP_KERNEL);
     if (!tu)
@@ -347,6 +392,7 @@ int kernel_thread(int (*fn)(void *), void *arg, unsigned long flags)
 
     p->counter    = p->timeslice;
     p->need_resched = 0;
+    /* flags 参数是调用者传入的线程创建标志，不写入 p->flags（内部 PF_* 标志） */
     p->flags      = PF_NEVER_STARTED;
 
     p->thread.esp0 = stack_base + THREAD_SIZE;
@@ -365,14 +411,23 @@ int kernel_thread(int (*fn)(void *), void *arg, unsigned long flags)
     p->thread.eip = (unsigned long)kernel_thread_helper;
     p->thread.esp = (unsigned long)sp;
 
+    /* 根据 flags 选择目标 CPU：
+     *   KT_BALANCE → 扫描所有在线 CPU，选最空闲的
+     *   其他情况   → 当前 CPU（低延迟，cache 熟热）
+     */
+    target_cpu = (flags & KT_BALANCE) ? find_idlest_cpu()
+                                      : smp_processor_id();
+
     p->state = TASK_RUNNING;
 
     local_irq_save(irq_flags);
-    add_task_to_runqueue(p);
+    add_task_to_cpu(p, target_cpu);
     list_add(&p->tasks, &task_list);
     local_irq_restore(irq_flags);
 
-    printk("sched: kernel_thread pid=%d fn=%p\n", p->pid, fn);
+    printk("sched: kernel_thread pid=%d fn=%p -> cpu %d%s\n",
+           p->pid, fn, target_cpu,
+           (flags & KT_BALANCE) ? " (balanced)" : "");
     return p->pid;
 }
 
