@@ -82,7 +82,7 @@ struct kmem_cache {
      * off_slab=0 时：slab 描述符嵌入 slab 页首（s_mem = 页基址 + sizeof(slab_t)）。
      */
     unsigned int    off_slab;       /* 1 = 描述符在 slab 页外 */
-    kmem_cache_t   *slabp_cache;    /* 描述符来源缓存（off_slab=1 时有效）*/
+    struct kmem_cache *slabp_cache;  /* 描述符来源缓存（off_slab=1 时有效）*/
 };
 
 typedef struct kmem_cache kmem_cache_t;
