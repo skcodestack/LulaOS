@@ -546,18 +546,9 @@ ENTRY(__switch_to)
     movl 28(%esp), %edx       /* edx = next */
     movl 56(%edx), %esp       /* %esp = next->thread.esp */
 
-    /* 恢复 callee-saved 寄存器 */
-    popl %edi
-    popl %esi
-    popl %ebx
-    popl %ebp
-
-    /* 恢复 eflags */
-    popfl
-
     /*
      * current 宏通过 esp & ~0x1FFF 自动更新，无需显式写入。
-     * 切换到 next 的栈后，get_current() 將返回 next.
+     * 切换到 next 的栈后，get_current() 将返回 next。
      */
 
     /* 切换 CR3 页目录（仅当 next->thread.pgd != 0 时） */
@@ -567,11 +558,26 @@ ENTRY(__switch_to)
     movl %ecx, %cr3
 1:
 
-    /* 若任务从未启动（PF_NEVER_STARTED），跳到 ret_from_fork */
+    /*
+     * 若任务从未启动（PF_NEVER_STARTED），直接跳转到 ret_from_fork。
+     * 此时不能先 pop callee-saved 寄存器：新任务的栈顶是 kernel_thread
+     * 构造的 [fn, arg]（或 sys_fork 构造的 pt_regs），并非保存的寄存器帧。
+     * 提前 pop 会导致 esp 越过 thread_union 顶部，ret_from_fork 用
+     * esp & ~0x1FFF 算出的 current 错误，进而读取垃圾 thread.eip。
+     */
     testl $0x00000001, 92(%edx)  /* next->flags (offset 0x5C) */
     jz 2f
     jmp SYMBOL_NAME(ret_from_fork)
 2:
+
+    /* 恢复 callee-saved 寄存器 */
+    popl %edi
+    popl %esi
+    popl %ebx
+    popl %ebp
+
+    /* 恢复 eflags */
+    popfl
 
     /* 正常返回：从 next->thread.eip 处继续执行 */
     ret

@@ -10,8 +10,8 @@ struct pt_regs
 	long esi;
 	long edi;
 	long ebp;
+	long es;        /* RESTORE_ALL 先 pop ES 再 pop DS，与 entry.S 布局一致 */
 	long ds;
-	long es; 
 	long eax;
     long func_addr;
     long error_code;

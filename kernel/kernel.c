@@ -1,4 +1,5 @@
 #include <printk.h>
+#include <stddef.h>
 #include <arch/x86/gdt.h>
 #include <arch/x86/idt.h>
 #include <arch/linkage.h>
