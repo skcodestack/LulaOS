@@ -22,6 +22,15 @@ static LIST_HEAD(cache_cache);
 static spinlock_t slab_lock = SPIN_LOCK_UNLOCKED;
 
 /*
+ * slab_initialized：kmem_cache_init() 完成后置 1
+ *
+ * 参考 Linux 2.6.20 slab_early_init：
+ *   引导期间不允许 OFF_SLAB（slabp_cache 尚未创建），
+ *   初始化完成后，大对象缓存可以启用 OFF_SLAB。
+ */
+static unsigned int slab_initialized = 0;
+
+/*
  * ==================== 通用分配器缓存池 ====================
  *
  * 参考 Linux 2.6.20 mm/slab.c malloc_sizes[]
@@ -59,9 +68,19 @@ static void slab_strncpy(char *dst, const char *src, unsigned int maxlen)
  *
  * 返回: 对象个数，0 表示对象过大无法放入
  */
-static unsigned int calc_num_objs(unsigned int aligned_size, unsigned int order)
+static unsigned int calc_num_objs(unsigned int aligned_size, unsigned int order,
+                                  unsigned int off_slab)
 {
     unsigned int total = PAGE_SIZE << order;
+
+    if (off_slab) {
+        /* OFF_SLAB：描述符在页外，整页都用于对象 */
+        if (aligned_size == 0)
+            return 0;
+        return total / aligned_size;
+    }
+
+    /* ON_SLAB：描述符嵌入页首 */
     unsigned int hdr_size    = sizeof(slab_t);
     unsigned int obj_start   = (hdr_size + SLAB_ALIGN_BYTES - 1)
                                & ~(SLAB_ALIGN_BYTES - 1);
@@ -120,14 +139,41 @@ static slab_t *kmem_cache_grow(kmem_cache_t *cache)
 
     /* 获取页的内核虚拟地址（直接映射区，由 zone_init 初始化） */
     void *vaddr = page->virtual;
+    slab_t *slab;
 
-    /* slab 描述符嵌入在页起始位置 */
-    slab_t *slab = (slab_t *)vaddr;
+    if (cache->off_slab && cache->slabp_cache) {
+        /*
+         * 【OFF_SLAB】描述符从 slabp_cache（kmalloc-32）独立分配
+         *
+         * 参考 Linux 2.6.20 alloc_slabmgmt()：
+         *   if (OFF_SLAB(cachep))
+         *       slabp = kmem_cache_alloc_node(cachep->slabp_cache, ...);
+         *   slabp->s_mem = objp + colour_off;  // OFF_SLAB 时 colour_off=0
+         *
+         * slab 页 100% 用于对象：s_mem = vaddr（页基址），
+         * 保证 8KB 对齐，使 current 宏（esp & ~0x1FFF）正确工作。
+         */
+        slab = (slab_t *)kmem_cache_alloc(cache->slabp_cache);
+        if (!slab) {
+            __free_pages(page, order);
+            printk("[SLAB] OOM: cannot alloc off-slab descriptor for '%s'\n",
+                   cache->name);
+            return NULL;
+        }
+        slab->s_mem = (char *)vaddr;   /* 对象从页基址开始，完美对齐 */
 
-    /* 计算对象区起始地址（对齐到 SLAB_ALIGN_BYTES） */
-    unsigned int obj_offset = (sizeof(slab_t) + SLAB_ALIGN_BYTES - 1)
-                              & ~(SLAB_ALIGN_BYTES - 1);
-    slab->s_mem = (char *)vaddr + obj_offset;
+        /* 在 slab 页末尾存储描述符指针（供 kmem_slab_destroy 反查） */
+        unsigned int total = PAGE_SIZE << order;
+        slab_t **backptr = (slab_t **)((char *)vaddr + total - sizeof(slab_t *));
+        *backptr = slab;
+    } else {
+        /* 【ON_SLAB】描述符嵌入 slab 页首（原有逻辑） */
+        slab = (slab_t *)vaddr;
+        unsigned int obj_offset = (sizeof(slab_t) + SLAB_ALIGN_BYTES - 1)
+                                  & ~(SLAB_ALIGN_BYTES - 1);
+        slab->s_mem = (char *)vaddr + obj_offset;
+    }
+
     slab->inuse = 0;
     slab->free  = 0;
 
@@ -136,7 +182,8 @@ static slab_t *kmem_cache_grow(kmem_cache_t *cache)
 
     /*
      * 在 page->virtual 存储 slab 描述符指针（用于 kmem_cache_free 反查）
-     * order=1 时占 2 页，需要标记两页的 virtual 为 slab
+     * OFF_SLAB 时：page->virtual 指向独立分配的描述符（不是 vaddr）
+     * ON_SLAB 时：page->virtual = slab = vaddr（描述符在页首）
      */
     unsigned int n_pages = 1u << order;
     for (unsigned int i = 0; i < n_pages; i++) {
@@ -160,8 +207,19 @@ static void kmem_slab_destroy(kmem_cache_t *cache, slab_t *slab)
     list_del(&slab->list);
     cache->num_slabs--;
 
-    /* 获取页面首地址 */
-    void *vaddr       = (void *)((unsigned long)slab & PAGE_MASK);
+    void *vaddr;
+
+    if (cache->off_slab && cache->slabp_cache) {
+        /*
+         * 【OFF_SLAB】页基址从 s_mem 获得（s_mem = 页基址），
+         * 描述符本身由 slabp_cache 回收。
+         */
+        vaddr = slab->s_mem;
+    } else {
+        /* 【ON_SLAB】描述符嵌入在页首，页基址 = slab 地址向下取整 */
+        vaddr = (void *)((unsigned long)slab & PAGE_MASK);
+    }
+
     struct page *page = virt_to_page(vaddr);
     unsigned int order = cache_order(cache);
     unsigned int n_pages = 1u << order;
@@ -172,6 +230,11 @@ static void kmem_slab_destroy(kmem_cache_t *cache, slab_t *slab)
         PageClearSlab(&page[i]);
     }
     __free_pages(page, order);
+
+    if (cache->off_slab && cache->slabp_cache) {
+        /* OFF_SLAB：描述符归还给 slabp_cache */
+        kmem_cache_free(cache->slabp_cache, slab);
+    }
 }
 
 /* ==================== 公共 API 实现 ==================== */
@@ -200,6 +263,35 @@ void kmem_cache_init(void)
         malloc_caches[i] = kmem_cache_create(names[i], malloc_sizes[i]);
         if (!malloc_caches[i])
             printk("[SLAB] WARNING: failed to create %s cache\n", names[i]);
+    }
+
+    /*
+     * 引导完成，允许后续创建的缓存使用 OFF_SLAB
+     *
+     * 注意：此时 malloc_caches[] 已在引导期间创建完毕，
+     * 引导时 slab_initialized=0，所有 malloc 缓存都是 ON_SLAB。
+     * 置位后，此后创建的缓存（若 size>=512）将启用 OFF_SLAB，
+     * slabp_cache 指向 kmalloc-32（足够容纳 sizeof(slab_t)=20B）。
+     */
+    slab_initialized = 1;
+
+    /* 为所有已创建的大对象 malloc 缓存补设 slabp_cache */
+    for (unsigned int i = 0; i < MALLOC_CACHE_COUNT; i++) {
+        if (malloc_caches[i] && malloc_sizes[i] >= (PAGE_SIZE >> 3)) {
+            malloc_caches[i]->off_slab    = 1;
+            malloc_caches[i]->slabp_cache = malloc_caches[0]; /* kmalloc-32 */
+            /*
+             * OFF_SLAB 后描述符不占页内空间，重算 num：
+             * ON_SLAB 时 kmalloc-8192 num=0（20字节头部装不下 8192 对象），
+             * OFF_SLAB 时 num=1（整页 8192 字节全用于对象，恰好一个）。
+             */
+            unsigned int new_num = calc_num_objs(
+                malloc_caches[i]->aligned_size,
+                malloc_caches[i]->alloc_order, 1);
+            malloc_caches[i]->num = new_num;
+            printk("[SLAB] %s: enabled OFF_SLAB, num=%u (slabp from kmalloc-32)\n",
+                   malloc_caches[i]->name, new_num);
+        }
     }
 }
 
@@ -236,10 +328,22 @@ kmem_cache_t *kmem_cache_create(const char *name, unsigned int size)
      * 动态计算最小 order：slab_t 头占用页首若干字节，
      * 若 aligned_size 接近 PAGE_SIZE << order 则需提升 order。
      * 参考 Linux 2.6.20 kmem_cache_create：对象至少容许 1 个/slab。
+     *
+     * 【OFF_SLAB 判断】参考 Linux 2.6.20 kmem_cache_create 第 2281 行：
+     *   if ((size >= (PAGE_SIZE >> 3)) && !slab_early_init)
+     *       flags |= CFLGS_OFF_SLAB;
+     *
+     * 对象大小 >= PAGE_SIZE/8(512B) 且 slab 子系统已初始化时，
+     * 启用 OFF_SLAB：描述符从 slabp_cache 独立分配，
+     * slab 页 100% 用于对象，s_mem = 页基址（保证 8KB 对齐）。
      */
+    unsigned int off_slab_flag = 0;
+    if (size >= (PAGE_SIZE >> 3) && slab_initialized)
+        off_slab_flag = 1;
+
     unsigned int order = 0;
     unsigned int num;
-    while ((num = calc_num_objs(aligned_size, order)) == 0) {
+    while ((num = calc_num_objs(aligned_size, order, off_slab_flag)) == 0) {
         order++;
         if (order > 5) {  /* 最大 32 页 = 128KB，超出则拒绝创建 */
             printk("[SLAB] object too large for slab: %u bytes\n", size);
@@ -256,6 +360,8 @@ kmem_cache_t *kmem_cache_create(const char *name, unsigned int size)
     cache->alloc_order  = order;
     cache->num          = num;
     cache->num_slabs    = 0;
+    cache->off_slab     = off_slab_flag;
+    cache->slabp_cache  = NULL;   /* 在 kmem_cache_init 完成后设置 */
 
     INIT_LIST_HEAD(&cache->partial);
     INIT_LIST_HEAD(&cache->full);

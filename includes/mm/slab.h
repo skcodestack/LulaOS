@@ -20,6 +20,16 @@
 /* 对象默认对齐：4 字节（32 位系统 long 对齐） */
 #define SLAB_ALIGN_BYTES    4
 
+/*
+ * SLAB_OFF_SLAB：slab 描述符存放在 slab 页之外（独立 kmalloc 分配）
+ *
+ * 参考 Linux 2.6.20 CFLGS_OFF_SLAB：
+ *   当对象 >= PAGE_SIZE/8 时启用，描述符从 slabp_cache 分配，
+ *   slab 页 100% 用于对象，对象从页基址（offset=0）开始，
+ *   保证 THREAD_SIZE(8KB) 对齐，使 current 宏（esp & ~0x1FFF）正确工作。
+ */
+#define SLAB_OFF_SLAB       0x00000001
+
 /* ======================== 数据结构 ======================== */
 
 /*
@@ -65,6 +75,14 @@ struct kmem_cache {
 
     /* ---- 名称 ---- */
     char            name[KMEM_CACHE_NAMELEN];
+
+    /* ---- OFF_SLAB 支持 ----
+     * off_slab=1 时：slab 描述符从 slabp_cache 独立分配，
+     * slab 页全部用于对象（s_mem = 页基址，保证 8KB 对齐）。
+     * off_slab=0 时：slab 描述符嵌入 slab 页首（s_mem = 页基址 + sizeof(slab_t)）。
+     */
+    unsigned int    off_slab;       /* 1 = 描述符在 slab 页外 */
+    kmem_cache_t   *slabp_cache;    /* 描述符来源缓存（off_slab=1 时有效）*/
 };
 
 typedef struct kmem_cache kmem_cache_t;
