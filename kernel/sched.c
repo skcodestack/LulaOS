@@ -60,8 +60,8 @@ runqueue_t runqueues[NR_CPUS];
 /* 全局任务链表（调试用） */
 static LIST_HEAD(task_list);
 
-/* 下一个 PID */
-static int next_pid = 1;
+/* 下一个 PID（SMP 安全：原子递增） */
+static atomic_t next_pid = ATOMIC_INIT(1);
 
 /* 上下文切换汇编入口 */
 extern void __switch_to(void);
@@ -295,8 +295,8 @@ int sys_fork(struct pt_regs *regs, unsigned long fork_flags)
     /* 从父进程复制基本字段 */
     *p = *current;
 
-    /* 分配新 PID */
-    p->pid = next_pid++;
+    /* 分配新 PID（原子递增，避免 SMP 下重复） */
+    p->pid = atomic_inc_return(&next_pid);
     p->state = TASK_UNINTERRUPTIBLE;
 
     /* 重新初始化链表节点 */
@@ -385,7 +385,8 @@ int kernel_thread(int (*fn)(void *), void *arg, unsigned long flags)
 
     *p = *current;
 
-    p->pid = next_pid++;
+    /* 分配新 PID（原子递增，避免 SMP 下重复） */
+    p->pid = atomic_inc_return(&next_pid);
     p->state = TASK_UNINTERRUPTIBLE;
     INIT_LIST_HEAD(&p->run_list);
     INIT_LIST_HEAD(&p->tasks);

@@ -50,6 +50,16 @@ static __inline__ void atomic_inc(atomic_t *v)
 		:"=m" (v->counter)
 		:"m" (v->counter));
 }
+
+static __inline__ int atomic_inc_return(atomic_t *v)
+{
+	int __i = 1;
+	__asm__ __volatile__(
+		LOCK "xaddl %0, %1"
+		:"=r"(__i), "+m"(v->counter)
+		:"0"(__i));
+	return __i + 1;
+}
  
 static __inline__ void atomic_dec(atomic_t *v)
 {
