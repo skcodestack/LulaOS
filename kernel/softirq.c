@@ -161,7 +161,7 @@ void irq_exit(void)
 static int ksoftirqd(void *arg)
 {
     (void)arg;
-    for (i = 0; i < 2; i++) {
+    for (int i = 0; i < 2; i++) {
         printk("[ksoftirqd] loop %d  (pid=%d)\n", i, current->pid);
     }
     for (;;) {
