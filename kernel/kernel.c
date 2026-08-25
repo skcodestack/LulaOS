@@ -11,6 +11,7 @@
 #include <kernel/sched.h>
 #include <arch/x86/smp.h>
 #include <kernel/softirq.h>
+#include <keyboard.h>
 
 /* ========== 进程调度测试线程 ========== */
 
@@ -106,6 +107,9 @@ asmlinkage void _kernel_main()
 
     _init_idt();
     _init_interrupts();
+
+    /* 键盘驱动注册（IOAPIC 已初始化，可直接 request_irq）*/
+    keyboard_init();
     
     sched_init();
 
