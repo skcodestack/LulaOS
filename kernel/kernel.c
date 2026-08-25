@@ -10,6 +10,7 @@
 #include <arch/x86/system.h>
 #include <kernel/sched.h>
 #include <arch/x86/smp.h>
+#include <kernel/softirq.h>
 
 /* ========== 进程调度测试线程 ========== */
 
@@ -73,6 +74,9 @@ static __attribute__((noreturn)) void bsp_start_idle(void)
         : "memory"
     );
 
+    /* 初始化软中断子系统（kmem_cache_init 已完成，kmalloc 可用）*/
+    softirq_init();
+
     /* 启动所有 AP（需要页分配器和 kmalloc 就绪） */
     smp_init();
 
@@ -104,7 +108,6 @@ asmlinkage void _kernel_main()
     _init_interrupts();
     
     sched_init();
-    /* softirq_init(); */
 
     mm_init();
 

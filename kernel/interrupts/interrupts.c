@@ -2,6 +2,7 @@
 #include <arch/x86/apic.h>
 #include <arch/x86/ptrace.h>
 #include <kernel/sched.h>
+#include <kernel/softirq.h>
 #include <printk.h>
 #include <stddef.h>
 
@@ -85,11 +86,14 @@ asmlinkage void do_IRQ(struct pt_regs *regs, long error_code)
     int vector = error_code;  // 向量号
     unsigned int idx = vector - FIRST_EXTERNAL_VECTOR;
 
+    irq_enter();
+
     // 发送 EOI，通知 LAPIC 中断已接受
     apic_write(APIC_EOI, 0);
 
     if (vector < FIRST_EXTERNAL_VECTOR || idx >= NR_IRQS) {
         printk("do_IRQ: unexpected vector %d\n", vector);
+        irq_exit();
         return;
     }
 
@@ -99,6 +103,8 @@ asmlinkage void do_IRQ(struct pt_regs *regs, long error_code)
     } else {
         printk("do_IRQ: vector %d (idx=%d) no handler registered\n", vector, idx);
     }
+
+    irq_exit();   /* 内部自动调用 do_softirq()（若有 pending）*/
 }
 
 /*
@@ -109,12 +115,16 @@ asmlinkage void do_IRQ(struct pt_regs *regs, long error_code)
  */
 void do_apic_timer_interrupt(struct pt_regs *regs, long error_code)
 {
+    irq_enter();
+
     /* EOI 必须在任何可能耗时的操作之前发送，
      * 否则 ISR 位会阻塞同级及低优先级中断 */
     apic_write(APIC_EOI, 0);
 
     /* 驱动调度器：递减时间片，必要时置位 need_resched */
     scheduler_tick();
+
+    irq_exit();
 }
 
 /*
@@ -124,8 +134,12 @@ void do_apic_timer_interrupt(struct pt_regs *regs, long error_code)
  */
 void do_apic_error_interrupt(struct pt_regs *regs, long error_code)
 {
+    irq_enter();
+
     unsigned int lvt_err = apic_read(APIC_ERR);
     printk("APIC Error interrupt: LVT ERR=%#x\n", lvt_err);
     apic_write(APIC_EOI, 0);
+
+    irq_exit();
 }
  

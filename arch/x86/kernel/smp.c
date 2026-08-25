@@ -22,6 +22,7 @@
 #include <mm/mmzone.h>
 #include <mm/slab.h>
 #include <kernel/sched.h>
+#include <kernel/softirq.h>
 
 /* 链接器符号（entry.S / linker.lds 导出），用于定位 GDT/GDTR 在 trampoline 页内的偏移 */
 extern unsigned char tramp_gdt[];
@@ -258,6 +259,9 @@ void start_secondary(void)
 
     printk("SMP: cpu %d is up (APIC ID %d)\n",
            cpu, GET_APIC_ID(apic_read(APIC_ID)));
+
+    /* 为 AP 创建 ksoftirqd 内核线程（须在 sti 之前，kmalloc 已就绪）*/
+    ksoftirqd_init();
 
     /* 开中断 */
     sti();
