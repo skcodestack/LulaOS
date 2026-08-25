@@ -12,37 +12,7 @@
 #include <arch/x86/smp.h>
 #include <kernel/softirq.h>
 #include <keyboard.h>
-
-/* ========== 进程调度测试线程 ========== */
-
-/*
- * test_thread_a / test_thread_b - 调度器测试线程
- *
- * 两个线程各自循环打印计数，验证调度器的时间片轮转是否正常工作。
- * 若调度器正常，两个线程的输出应当交替出现。
- */
-static int test_thread_a(void *arg)
-{
-    int i;
-    (void)arg;
-    for (i = 0; i < 10; i++) {
-        printk("[thread-A] loop %d  (pid=%d)\n", i, current->pid);
-    }
-    printk("[thread-A] done, exiting.\n");
-    return 0;
-}
-
-static int test_thread_b(void *arg)
-{
-    int i;
-    (void)arg;
-    for (i = 0; i < 10; i++) {
-        printk("[thread-B] loop %d  (pid=%d)\n", i, current->pid);
-    }
-    printk("[thread-B] done, exiting.\n");
-    return 0;
-}
-
+ 
 void _kernel_init()
 {
     _init_gdt();
@@ -83,14 +53,6 @@ static __attribute__((noreturn)) void bsp_start_idle(void)
 
     printk("Finished\n");
 
-     /*
-     * 调度器测试：创建两个内核线程
-     * 它们会各自循环打印计数，验证时间片轮转调度是否正常工作。
-     * 预期结果：thread-A 与 thread-B 的输出交替出现。
-     */
-    printk("sched_test: creating test threads...\n");
-    kernel_thread(test_thread_a, NULL, 0);
-    kernel_thread(test_thread_b, NULL, 0);
     /* 开中断，进入 idle 循环 */
     sti();
     cpu_idle();

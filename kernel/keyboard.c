@@ -18,6 +18,7 @@
 #include <arch/x86/io.h>
 #include <arch/x86/ptrace.h>
 #include <printk.h>
+#include <stddef.h>
 
 /* PS/2 键盘 I/O 端口 */
 #define KBD_DATA_PORT    0x60   /* 扫描码数据端口 */

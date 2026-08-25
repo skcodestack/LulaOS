@@ -161,6 +161,9 @@ void irq_exit(void)
 static int ksoftirqd(void *arg)
 {
     (void)arg;
+    for (i = 0; i < 2; i++) {
+        printk("[ksoftirqd] loop %d  (pid=%d)\n", i, current->pid);
+    }
     for (;;) {
         /* 无 pending 时睡眠，等待 do_softirq 唤醒 */
         if (!softirq_pending[smp_processor_id()])
