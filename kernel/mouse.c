@@ -20,6 +20,7 @@
 #include <arch/x86/io.h>
 #include <arch/x86/ptrace.h>
 #include <printk.h>
+#include <stddef.h>
 
 /* PS/2 控制器 I/O 端口 */
 #define PS2_DATA_PORT    0x60   /* 数据端口（键盘/鼠标共用） */
@@ -45,16 +46,24 @@ static signed char   mouse_byte[3];      /* 3 字节缓冲区 */
 
 /* ========== PS/2 端口辅助函数 ========== */
 
+/* 等待超时计数（防止死循环） */
+#define PS2_TIMEOUT  100000
+
 /*
  * ps2_wait_input - 等待 PS/2 控制器输入缓冲区空闲
  *
  * 状态寄存器 bit1=1 表示输入缓冲区满（不可写入），
  * 循环等待直到 bit1=0。
+ * 返回：0 成功，-1 超时
  */
-static void ps2_wait_input(void)
+static int ps2_wait_input(void)
 {
-    while (inb(PS2_STATUS_PORT) & 0x02)
-        ;
+    int timeout = PS2_TIMEOUT;
+    while (inb(PS2_STATUS_PORT) & 0x02) {
+        if (--timeout <= 0)
+            return -1;
+    }
+    return 0;
 }
 
 /*
@@ -62,11 +71,16 @@ static void ps2_wait_input(void)
  *
  * 状态寄存器 bit0=1 表示输出缓冲区有数据可读，
  * 循环等待直到 bit0=1。
+ * 返回：0 成功，-1 超时
  */
-static void ps2_wait_output(void)
+static int ps2_wait_output(void)
 {
-    while (!(inb(PS2_STATUS_PORT) & 0x01))
-        ;
+    int timeout = PS2_TIMEOUT;
+    while (!(inb(PS2_STATUS_PORT) & 0x01)) {
+        if (--timeout <= 0)
+            return -1;
+    }
+    return 0;
 }
 
 /*
@@ -74,13 +88,17 @@ static void ps2_wait_output(void)
  *
  * PS/2 控制器端口 0x60 默认与键盘通信，向鼠标发命令需要
  * 先发送 0xD4 前缀，控制器才会将下一字节转发给鼠标。
+ * 返回：0 成功，-1 超时
  */
-static void mouse_send_cmd(unsigned char cmd)
+static int mouse_send_cmd(unsigned char cmd)
 {
-    ps2_wait_input();
+    if (ps2_wait_input() < 0)
+        return -1;
     outb(PS2_CMD_PORT, PS2_CMD_WRITE_MOUSE);   /* 告诉控制器：下一字节发鼠标 */
-    ps2_wait_input();
+    if (ps2_wait_input() < 0)
+        return -1;
     outb(PS2_DATA_PORT, cmd);                    /* 发送实际命令 */
+    return 0;
 }
 
 /*
@@ -88,11 +106,13 @@ static void mouse_send_cmd(unsigned char cmd)
  *
  * 等待输出缓冲区就绪后读取数据端口。
  * 正常 ACK 响应为 0xFA。
+ * 返回：响应字节，或 -1 超时
  */
-static unsigned char mouse_read_response(void)
+static int mouse_read_response(void)
 {
-    ps2_wait_output();
-    return inb(PS2_DATA_PORT);
+    if (ps2_wait_output() < 0)
+        return -1;
+    return (int)inb(PS2_DATA_PORT);
 }
 
 /* ========== 中断处理函数 ========== */
@@ -189,31 +209,51 @@ void mouse_init(void)
 {
     unsigned char cfg;
     int ret;
+    int resp;
 
     /* 1. 启用 AUX（鼠标）端口 */
-    ps2_wait_input();
+    if (ps2_wait_input() < 0) {
+        printk("mouse: PS/2 controller not ready, skip init\n");
+        return;
+    }
     outb(PS2_CMD_PORT, PS2_CMD_ENABLE_AUX);
 
     /* 2. 读-改-写配置字节：开启 AUX 中断 */
-    ps2_wait_input();
+    if (ps2_wait_input() < 0)
+        goto fail;
     outb(PS2_CMD_PORT, PS2_CMD_READ_CFG);
-    cfg = mouse_read_response();
+    resp = mouse_read_response();
+    if (resp < 0)
+        goto fail;
+    cfg = (unsigned char)resp;
 
     cfg |= 0x02;    /* bit1=1: 开启 AUX 端口中断（IRQ12） */
     cfg &= ~0x20;   /* bit5=0: 确保鼠标时钟未禁用 */
 
-    ps2_wait_input();
+    if (ps2_wait_input() < 0)
+        goto fail;
     outb(PS2_CMD_PORT, PS2_CMD_WRITE_CFG);
-    ps2_wait_input();
+    if (ps2_wait_input() < 0)
+        goto fail;
     outb(PS2_DATA_PORT, cfg);
 
     /* 3. 向鼠标发送 SET_DEFAULTS */
-    mouse_send_cmd(MOUSE_CMD_SET_DEFAULTS);
-    mouse_read_response();   /* ACK = 0xFA */
+    if (mouse_send_cmd(MOUSE_CMD_SET_DEFAULTS) < 0)
+        goto fail;
+    resp = mouse_read_response();
+    if (resp < 0 || (unsigned char)resp != 0xFA) {
+        printk("mouse: no mouse detected (ACK=%#x)\n", resp);
+        goto fail;
+    }
 
     /* 4. 向鼠标发送 ENABLE（开始上报） */
-    mouse_send_cmd(MOUSE_CMD_ENABLE);
-    mouse_read_response();   /* ACK = 0xFA */
+    if (mouse_send_cmd(MOUSE_CMD_ENABLE) < 0)
+        goto fail;
+    resp = mouse_read_response();
+    if (resp < 0 || (unsigned char)resp != 0xFA) {
+        printk("mouse: enable failed (ACK=%#x)\n", resp);
+        goto fail;
+    }
 
     /* 5. 注册 IRQ12 处理函数 */
     ret = request_irq(MOUSE_VECTOR, mouse_handler, "mouse", NULL);
@@ -222,4 +262,8 @@ void mouse_init(void)
     else
         printk("mouse: failed to register IRQ12 (vector=%#x)\n",
                MOUSE_VECTOR);
+    return;
+
+fail:
+    printk("mouse: init failed, PS/2 mouse not available\n");
 }
