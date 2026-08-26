@@ -1,5 +1,3 @@
-
-insmod all_video
 set gfxpayload=1024x768x32
 
 menuentry "$_OS_NAME" {
