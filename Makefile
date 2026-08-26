@@ -16,7 +16,7 @@ INCLUDES := $(patsubst %, -I% ,$(INCLUDES_DIR))
 
 OS_NAME := LulaOS
 OS_BIN := $(OS_NAME).bin
-OS_IOS := $(OS_NAME).iso
+OS_ISO := $(OS_NAME).iso
 
 CC := i686-elf-gcc
 AS := i686-elf-as
@@ -52,17 +52,17 @@ $(BIN_DIR)/$(OS_BIN):$(OBJECT_DIR) $(BIN_DIR) $(SRC)
 	echo "Linking $(SRC)..."
 	$(CC) -T linker.lds -o $@  $(SRC) $(LDFLAGS)
 
-$(BUILD_DIR)/$(OS_IOS): $(ISO_DIR) $(BIN_DIR)/$(OS_BIN) GRUB_TEMPLATE
+$(BUILD_DIR)/$(OS_ISO): $(ISO_DIR) $(BIN_DIR)/$(OS_BIN) GRUB_TEMPLATE
 	@./config-grub.sh $(OS_NAME) >  $(ISO_GRUB_DIR)/grub.cfg
 	@cp $(BIN_DIR)/$(OS_BIN) $(ISO_BOOT_DIR)
-	@grub-mkrescue -o $(BUILD_DIR)/$(OS_IOS) $(ISO_DIR)
+	@grub-mkrescue -o $(BUILD_DIR)/$(OS_ISO) $(ISO_DIR)
 
-all: clean $(BUILD_DIR)/$(OS_IOS)
+all: clean $(BUILD_DIR)/$(OS_ISO)
 
 all-debug: O := -O0
 all-debug: CFLAGS := -m32 -g -std=gnu99 -ffreestanding $(O) $(W) -fomit-frame-pointer
 all-debug: LDFLAGS :=  -ffreestanding $(O)   -nostdlib -lgcc
-all-debug: clean $(BUILD_DIR)/$(OS_IOS)
+all-debug: clean $(BUILD_DIR)/$(OS_ISO)
 	@echo "Dumping the disassembled kernel code to $(BUILD_DIR)/kdump.txt"
 	@i686-elf-objdump -D $(BIN_DIR)/$(OS_BIN) > $(BUILD_DIR)/kdump.txt
 
@@ -70,7 +70,7 @@ all-debug: clean $(BUILD_DIR)/$(OS_IOS)
 clean : 
 	@rm -rf $(BUILD_DIR)
 
-run: $(BUILD_DIR)/$(OS_IOS)
+run: $(BUILD_DIR)/$(OS_ISO)
 	@qemu-system-i386 -cdrom $(BUILD_DIR)/$(OS_ISO) -monitor telnet::$(QEMU_MON_PORT),server,nowait &
 	@sleep 1
 	@telnet 127.0.0.1 $(QEMU_MON_PORT)
