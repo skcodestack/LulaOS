@@ -137,12 +137,23 @@ static const char scancode_to_ascii[128] = {
  */
 static void keyboard_handler(int irq, void *dev_id, struct pt_regs *regs)
 {
+    unsigned char status;
     unsigned char scancode;
     char ch;
 
     (void)irq;
     (void)dev_id;
     (void)regs;
+
+    /*
+     * 检查状态寄存器：
+     *   bit5=1 表示数据来自鼠标（AUX 端口），不应由键盘处理
+     *   bit0=1 表示输出缓冲区有数据可读
+     * 与鼠标共享 PS/2 控制器，必须区分数据来源
+     */
+    status = inb(KBD_STATUS_PORT);
+    if (status & 0x20)
+        return;   /* 鼠标数据，跳过 */
 
     /* 读取扫描码（读 0x60 同时清除中断请求） */
     scancode = inb(KBD_DATA_PORT);

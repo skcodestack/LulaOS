@@ -12,6 +12,7 @@
 #include <arch/x86/smp.h>
 #include <kernel/softirq.h>
 #include <keyboard.h>
+#include <mouse.h>
  
 void _kernel_init()
 {
@@ -72,6 +73,9 @@ asmlinkage void _kernel_main()
 
     /* 键盘驱动注册（IOAPIC 已初始化，可直接 request_irq）*/
     keyboard_init();
+
+    /* 鼠标驱动注册（须在键盘之后，共享 PS/2 控制器端口）*/
+    mouse_init();
     
     sched_init();
 
