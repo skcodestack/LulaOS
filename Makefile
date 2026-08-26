@@ -70,14 +70,14 @@ all-debug: clean $(BUILD_DIR)/$(OS_ISO)
 clean : 
 	@rm -rf $(BUILD_DIR)
 
-run: $(BUILD_DIR)/$(OS_ISO)
-	@qemu-system-i386 -cdrom $(BUILD_DIR)/$(OS_ISO) -monitor telnet::$(QEMU_MON_PORT),server,nowait &
+run-qemu: $(BUILD_DIR)/$(OS_ISO)
+	@qemu-system-i386 -cdrom $(BUILD_DIR)/$(OS_ISO) -m 2048 -smp 4 -monitor telnet::$(QEMU_MON_PORT),server,nowait &
 	@sleep 1
 	@telnet 127.0.0.1 $(QEMU_MON_PORT)
 
 debug-qemu: all-debug
 	@i686-elf-objcopy --only-keep-debug $(BIN_DIR)/$(OS_BIN) $(BUILD_DIR)/kernel.dbg
-	@qemu-system-i386 -s -S -cdrom $(BUILD_DIR)/$(OS_ISO) -monitor telnet::$(QEMU_MON_PORT),server,nowait &
+	@qemu-system-i386 -s -S -cdrom $(BUILD_DIR)/$(OS_ISO) -m 2048 -smp 4 -monitor telnet::$(QEMU_MON_PORT),server,nowait &
 	@sleep 1
 	@$(QEMU_MON_TERM) -e "telnet 127.0.0.1 $(QEMU_MON_PORT)"
 	@gdb -s $(BUILD_DIR)/kernel.dbg -ex "target remote localhost:1234"
