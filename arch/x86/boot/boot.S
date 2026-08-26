@@ -5,7 +5,7 @@
 #include <arch/linkage.h>
 #include <arch/x86/thread_info.h>
 
-#define MB_FLAGS    (MULTIBOOT_MEMORY_INFO | MULTIBOOT_PAGE_ALIGN)
+#define MB_FLAGS    (MULTIBOOT_MEMORY_INFO | MULTIBOOT_PAGE_ALIGN | MULTIBOOT_VIDEO_MODE)
 /* 内存bitmap ,存放在  内核+PGD+PDE后*/
 #define INIT_MAP_BEYOND_END	(128*1024)
 #define PAGE_OFFSET_INDEX (__PAGE_OFFSET >> 20) /* page table index */
@@ -14,6 +14,17 @@
     .long MULTIBOOT_MAGIC
     .long MB_FLAGS
     .long CHECKSUM(MB_FLAGS)
+    /* Multiboot1 address fields (unused without AOUT_KLUDGE, set 0) */
+    .long 0          /* header_addr */
+    .long 0          /* load_addr */
+    .long 0          /* load_end_addr */
+    .long 0          /* bss_end_addr */
+    .long 0          /* entry_addr */
+    /* Multiboot1 video mode fields (MULTIBOOT_VIDEO_MODE) */
+    .long 0          /* mode_type = 0 (linear graphics) */
+    .long 1024       /* width */
+    .long 768        /* height */
+    .long 32         /* depth (bpp) */
 
 .section .bss
     /* Accoding to   System V ABI, the stack should be 16-byte aligned */

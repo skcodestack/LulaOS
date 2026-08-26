@@ -1,5 +1,9 @@
 typedef unsigned short vga_attribute;
 
+/* TTY 显示模式 */
+#define TTY_MODE_VGA_TEXT  0
+#define TTY_MODE_FB        1
+
 #define VGA_COLOR_BLACK 0
 #define VGA_COLOR_BLUE 1
 #define VGA_COLOR_GREEN 2
@@ -23,3 +27,5 @@ void tty_put_string(char *str);
 void tty_scroll_up();
 void tty_clear();
 void tty_set_buffer_base(unsigned long base);
+void tty_set_mode(int mode);
+void tty_replay_buffer(void);
