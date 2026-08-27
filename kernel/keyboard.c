@@ -14,6 +14,7 @@
  */
 
 #include <keyboard.h>
+#include <device/platform.h>
 #include <interrupts/interrupts.h>
 #include <arch/x86/io.h>
 #include <arch/x86/ptrace.h>
@@ -179,14 +180,26 @@ static void keyboard_handler(int irq, void *dev_id, struct pt_regs *regs)
     /* 功能键/修饰键（ch=='\0'）：静默忽略 */
 }
 
+/* ========== Platform 设备/驱动定义 ========== */
+
+static struct platform_resource kbd_resources[] = {
+    { .start = KBD_DATA_PORT, .end = KBD_STATUS_PORT, .flags = IORESOURCE_IO },
+    { .start = KEYBOARD_VECTOR, .end = KEYBOARD_VECTOR, .flags = IORESOURCE_IRQ },
+};
+
+static struct platform_device keyboard_device = {
+    .dev.name = "ps2-keyboard",
+    .id = -1,
+    .resource = kbd_resources,
+    .num_resources = 2,
+};
+
 /*
- * keyboard_init - 注册键盘中断
+ * keyboard_probe - 键盘 Platform 驱动 probe
  *
- * 调用 request_irq(KEYBOARD_VECTOR, ...)，注册成功后
- * request_irq 内部自动调用 ioapic_enable_irq()，
- * IOAPIC RTE 解除屏蔽，键盘中断开始触发。
+ * 匹配成功后注册键盘中断处理函数。
  */
-void keyboard_init(void)
+static int keyboard_probe(struct platform_device *pdev)
 {
     int ret = request_irq(KEYBOARD_VECTOR, keyboard_handler,
                           "keyboard", NULL);
@@ -195,4 +208,22 @@ void keyboard_init(void)
     else
         printk("keyboard: failed to register IRQ1 (vector=%#x)\n",
                KEYBOARD_VECTOR);
+    return ret;
+}
+
+static struct platform_driver keyboard_driver = {
+    .driver.name = "ps2-keyboard",
+    .probe = keyboard_probe,
+};
+
+/*
+ * keyboard_init - 注册键盘 Platform 设备和驱动
+ *
+ * 在统一设备模型下，设备与驱动通过名称匹配，匹配成功后
+ * 自动调用 keyboard_probe() 注册中断。
+ */
+void keyboard_init(void)
+{
+    platform_device_register(&keyboard_device);
+    platform_driver_register(&keyboard_driver);
 }

@@ -1,5 +1,7 @@
 #include <printk.h>
 #include <stddef.h>
+#include <device/device.h>
+#include <device/platform.h>
 #include <arch/x86/gdt.h>
 #include <arch/x86/idt.h>
 #include <arch/linkage.h>
@@ -13,6 +15,7 @@
 #include <kernel/softirq.h>
 #include <keyboard.h>
 #include <mouse.h>
+#include <pci/pci.h>
  
 void _kernel_init()
 {
@@ -71,17 +74,23 @@ asmlinkage void _kernel_main()
     _init_idt();
     _init_interrupts();
 
-    /* 键盘驱动注册（IOAPIC 已初始化，可直接 request_irq）*/
-    keyboard_init();
-
-    /* 鼠标驱动注册（须在键盘之后，共享 PS/2 控制器端口）*/
-    mouse_init();
-    
     sched_init();
 
     mm_init();
 
     kmem_cache_init(); 
+
+    /* 注册 Platform 总线（键盘/鼠标等设备挂在此总线上） */
+    platform_bus_init();
+
+    /* 注册 Platform 设备：键盘 */
+    keyboard_init();
+
+    /* 注册 Platform 设备：鼠标 */
+    mouse_init();
+
+    /* PCI 总线枚举（需要 kmalloc 就绪） */
+    pci_init();
 
     /*
      * 切换到 init_thread_union 内核栈并进入 idle 循环

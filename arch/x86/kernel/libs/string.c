@@ -19,6 +19,21 @@ size_t strnlen(const char *s, size_t count)
 	return sc - s;
 }
 
+int strcmp(const char *cs, const char *ct)
+{
+	register signed char __res;
+
+	while (1) {
+		__res = *cs - *ct;
+		if (__res != 0 || !*cs)
+			break;
+		cs++;
+		ct++;
+	}
+
+	return __res;
+}
+
 int strncmp(const char * cs,const char * ct,size_t count)
 {
 	register signed char __res = 0;

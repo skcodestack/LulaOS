@@ -16,6 +16,7 @@
  */
 
 #include <mouse.h>
+#include <device/platform.h>
 #include <interrupts/interrupts.h>
 #include <arch/x86/io.h>
 #include <arch/x86/ptrace.h>
@@ -194,18 +195,26 @@ static void mouse_handler(int irq, void *dev_id, struct pt_regs *regs)
 
 /* ========== 初始化 ========== */
 
+/* ========== Platform 设备/驱动定义 ========== */
+
+static struct platform_resource mouse_resources[] = {
+    { .start = PS2_DATA_PORT, .end = PS2_CMD_PORT, .flags = IORESOURCE_IO },
+    { .start = MOUSE_VECTOR, .end = MOUSE_VECTOR, .flags = IORESOURCE_IRQ },
+};
+
+static struct platform_device mouse_device = {
+    .dev.name = "ps2-mouse",
+    .id = -1,
+    .resource = mouse_resources,
+    .num_resources = 2,
+};
+
 /*
- * mouse_init - 初始化 PS/2 鼠标并注册中断
+ * mouse_probe - 鼠标 Platform 驱动 probe
  *
- * 流程：
- *   1. 发送 ENABLE_AUX 命令，启用控制器的第二端口
- *   2. 读取控制器配置字节，置位 bit1（开启 AUX IRQ），
- *      清除 bit5（确保鼠标时钟未禁用），写回配置
- *   3. 向鼠标发送 SET_DEFAULTS（恢复 100Hz/4:1 缩放）
- *   4. 向鼠标发送 ENABLE（开始数据上报）
- *   5. 调用 request_irq() 注册 IRQ12 处理函数
+ * 匹配成功后初始化 PS/2 鼠标并注册中断。
  */
-void mouse_init(void)
+static int mouse_probe(struct platform_device *pdev)
 {
     unsigned char cfg;
     int ret;
@@ -214,7 +223,7 @@ void mouse_init(void)
     /* 1. 启用 AUX（鼠标）端口 */
     if (ps2_wait_input() < 0) {
         printk("mouse: PS/2 controller not ready, skip init\n");
-        return;
+        return -1;
     }
     outb(PS2_CMD_PORT, PS2_CMD_ENABLE_AUX);
 
@@ -262,8 +271,23 @@ void mouse_init(void)
     else
         printk("mouse: failed to register IRQ12 (vector=%#x)\n",
                MOUSE_VECTOR);
-    return;
+    return ret;
 
 fail:
     printk("mouse: init failed, PS/2 mouse not available\n");
+    return -1;
+}
+
+static struct platform_driver mouse_driver = {
+    .driver.name = "ps2-mouse",
+    .probe = mouse_probe,
+};
+
+/*
+ * mouse_init - 注册鼠标 Platform 设备和驱动
+ */
+void mouse_init(void)
+{
+    platform_device_register(&mouse_device);
+    platform_driver_register(&mouse_driver);
 }
