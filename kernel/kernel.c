@@ -20,6 +20,7 @@
 #include <pci/pci.h>
 #include <usb/usb.h>
 #include <usb/uhci.h>
+#include <drm/drm_core.h>
  
 void _kernel_init()
 {
@@ -107,6 +108,12 @@ asmlinkage void _kernel_main()
 
     /* UHCI 主机控制器 PCI 驱动（发现并初始化 UHCI 控制器，创建 Root Hub） */
     uhci_init();
+
+    /* DRM 核心框架初始化 */
+    drm_core_init();
+
+    /* Bochs/QEMU VBE DRM 驱动（发现 VGA 设备并初始化 KMS） */
+    drm_bochs_init();
 
     /*
      * 切换到 init_thread_union 内核栈并进入 idle 循环
