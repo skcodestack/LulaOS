@@ -1,13 +1,15 @@
 /*
- * LulaOS ioremap 实现
+ * LulaOS ioremap / vmalloc 实现
  *
- * 参考 arch/i386/mm/ioremap.c 和 lib/ioremap.c（Linux 2.6.20）
+ * 参考 arch/i386/mm/ioremap.c, lib/ioremap.c, mm/vmalloc.c（Linux 2.6.20）
  *
- * 功能：将任意物理地址范围映射到内核虚拟地址空间，供 MMIO 访问。
+ * 功能：
+ *   ioremap  : 将任意物理地址范围映射到内核虚拟地址空间，供 MMIO 访问。
+ *   vmalloc  : 分配物理不连续但虚拟连续的内存块（普通内核内存）。
  *
  * 虚拟地址空间布局：
  *   0xC0000000 ~ 0xF7FFFFFF : 直接映射区（0~896MB，已建立）
- *   0xF8000000 ~ 0xFDFFFFFF : ioremap/vmalloc 区（本文件使用，96MB）
+ *   0xF8000000 ~ 0xFDFFFFFF : ioremap/vmalloc 共享区（本文件使用，96MB）
  *   0xFE000000 ~ 0xFE3FFFFF : PKMAP 永久映射区
  *   0xFFC00000 ~ 0xFFFFE000 : Fixmap 固定映射区
  *
@@ -33,18 +35,27 @@
 #define VMALLOC_START   0xF8000000UL   /* 直接映射区之后 */
 #define VMALLOC_END     0xFE000000UL   /* PKMAP 之前 */
 
+/* vm_struct.flags 取值 */
+#define VM_IOREMAP  0x00000001   /* ioremap 映射（不释放物理页） */
+#define VM_ALLOC    0x00000002   /* vmalloc 分配（vfree 时释放物理页） */
+
 /* ======================== 数据结构 ======================== */
 
 /*
  * vm_struct - 已分配的虚拟内存区域描述
  *
- * 参考 Linux struct vm_struct（简化版），仅保留 ioremap 所需字段。
- * 通过链表组织，供 iounmap 查找并释放。
+ * 参考 Linux struct vm_struct（简化版），同时服务 ioremap 和 vmalloc。
+ * 通过链表组织，供 iounmap / vfree 查找并释放。
+ *
+ * flags 字段区分区域来源：
+ *   VM_IOREMAP : ioremap 建立，iounmap 只清除 PTE，不释放物理页
+ *   VM_ALLOC   : vmalloc 分配，vfree 需从 PTE 读 PFN 并归还伙伴系统
  */
 struct vm_struct {
     void            *addr;        /* 映射起始虚拟地址 */
     unsigned long    size;        /* 映射大小（页对齐后） */
-    unsigned long    phys_addr;   /* 原始物理地址（页对齐后） */
+    unsigned long    phys_addr;   /* ioremap: 原始物理地址（vmalloc: 0） */
+    unsigned long    flags;       /* VM_IOREMAP / VM_ALLOC */
     struct vm_struct *next;
 };
 
@@ -91,6 +102,7 @@ static struct vm_struct *get_vm_area(unsigned long size)
     area->addr      = (void *)start;
     area->size      = PAGE_ALIGN(size);
     area->phys_addr = 0;
+    area->flags     = 0;
     area->next      = vmlist;
     vmlist          = area;
 
@@ -225,6 +237,7 @@ void *ioremap(unsigned long phys_addr, unsigned long size)
     if (!area)
         return NULL;
     area->phys_addr = aligned_phys;
+    area->flags     = VM_IOREMAP;
 
     /* ⑤ 构造保护位：Present + RW + Dirty + Accessed + PCD（禁用缓存） */
     prot = __pgprot(_PAGE_PRESENT | _PAGE_RW | _PAGE_DIRTY
@@ -289,15 +302,205 @@ void iounmap(void *addr)
         return;
     }
 
-    area     = *p;
-    vaddr    = (unsigned long)area->addr;
+    area = *p;
+    if (!(area->flags & VM_IOREMAP)) {
+        printk("iounmap: address %p is not an ioremap region\n", addr);
+        return;
+    }
+
+    vaddr     = (unsigned long)area->addr;
     vaddr_end = vaddr + area->size;
 
-    /* 清除所有 PTE 条目（解除映射） */
+    /* 清除所有 PTE 条目（解除映射，不释放物理页） */
     while (vaddr < vaddr_end) {
         pgd_t *pgd = pgd_offset(swapper_pg_dir, vaddr);
         if (!pgd_none(*pgd)) {
             pte_t *pte = pte_offset(pgd, vaddr);
+            set_pte(pte, __pte(0));
+            __flush_tlb_one(vaddr);
+        }
+        vaddr += PAGE_SIZE;
+    }
+
+    /* 从链表移除 */
+    *p = area->next;
+    kfree(area);
+}
+
+/* ======================== vmalloc / vfree ======================== */
+
+/*
+ * vmalloc_pte_range - 为 vmalloc 分配物理页并填入 PTE
+ *
+ * 与 ioremap_pte_range 的核心差异：
+ *   ioremap:  外部提供 phys_addr，只建立映射
+ *   vmalloc:  每页调用 __alloc_pages() 从伙伴系统取新页，填入 PTE
+ *
+ * 失败时已分配的页不在此函数回滚，由上层 vfree 路径负责。
+ */
+static int vmalloc_pte_range(pgd_t *pgd, unsigned long addr,
+                              unsigned long end, pgprot_t prot)
+{
+    pte_t *pte;
+
+    /* 若 PGD 条目为空，分配一页作为 PTE 表 */
+    if (pgd_none(*pgd)) {
+        struct page *ptepage = __alloc_pages(0, 0);
+        if (!ptepage) {
+            printk("vmalloc: cannot allocate PTE page for addr=%#lx\n", addr);
+            return -1;
+        }
+        unsigned long pfn  = (unsigned long)(ptepage - mem_map);
+        pte_t *pte_base    = (pte_t *)__va(pfn << PAGE_SHIFT);
+        memset(pte_base, 0, PAGE_SIZE);
+        set_pgd(pgd, __pgd(__pa(pte_base) + _KERNPG_TABLE));
+    }
+
+    pte = pte_offset(pgd, addr);
+    do {
+        struct page *page = __alloc_pages(0, 0);
+        if (!page) {
+            printk("vmalloc: out of memory at addr=%#lx\n", addr);
+            return -1;
+        }
+        unsigned long pfn = (unsigned long)(page - mem_map);
+        set_pte(pte, __mk_pte(pfn, prot));
+    } while (pte++, addr += PAGE_SIZE, addr < end);
+
+    return 0;
+}
+
+/*
+ * vmalloc_page_range - 在 swapper_pg_dir 中为 vmalloc 建立映射
+ *
+ * 与 ioremap_page_range 的差异：不传入 phys_addr，每页由
+ * vmalloc_pte_range 自行从伙伴系统分配。
+ */
+static int vmalloc_page_range(unsigned long addr, unsigned long end,
+                               pgprot_t prot)
+{
+    pgd_t *pgd;
+    unsigned long next;
+
+    pgd = pgd_offset(swapper_pg_dir, addr);
+    do {
+        next = (addr + PGDIR_SIZE) & PGDIR_MASK;
+        if (next > end || next < addr)
+            next = end;
+
+        if (vmalloc_pte_range(pgd, addr, next, prot))
+            return -1;
+
+        addr = next;
+    } while (pgd++, addr < end);
+
+    /* 刷新 TLB */
+    __asm__ __volatile__(
+        "movl %%cr3, %%eax\n\t"
+        "movl %%eax, %%cr3"
+        ::: "eax", "memory"
+    );
+
+    return 0;
+}
+
+/*
+ * vmalloc - 分配虚拟连续、物理不连续的内核内存
+ *
+ * 参考 mm/vmalloc.c __vmalloc()（Linux 2.6.20）
+ *
+ * 每页独立从伙伴系统分配，映射到 vmalloc 区的连续虚拟地址。
+ * 适合需要大块连续虚拟地址、但不要求物理连续的场景。
+ *
+ * size : 请求大小（字节，内部页对齐）
+ * 返回 : 可直接读写的内核虚拟地址，NULL 表示失败
+ * 释放 : vfree()
+ *
+ * 注意：分配出的内存未清零，调用方需自行初始化。
+ */
+void *vmalloc(unsigned long size)
+{
+    unsigned long aligned_size;
+    struct vm_struct *area;
+    pgprot_t prot;
+
+    if (!size)
+        return NULL;
+
+    aligned_size = PAGE_ALIGN(size);
+
+    /* 分配虚拟地址段 */
+    area = get_vm_area(aligned_size);
+    if (!area)
+        return NULL;
+    area->flags = VM_ALLOC;
+
+    /* 普通内核内存：可缓存（不带 _PAGE_PCD） */
+    prot = __pgprot(_PAGE_PRESENT | _PAGE_RW | _PAGE_DIRTY | _PAGE_ACCESSED);
+
+    /* 逐页分配物理页并建立映射 */
+    if (vmalloc_page_range((unsigned long)area->addr,
+                           (unsigned long)area->addr + aligned_size,
+                           prot)) {
+        printk("vmalloc: failed to allocate %lu bytes\n", size);
+        /* 失败时由 vfree 路径清理已分配页 */
+        vfree(area->addr);
+        return NULL;
+    }
+
+    return area->addr;
+}
+
+/*
+ * vfree - 释放 vmalloc 分配的内存
+ *
+ * 流程：
+ *   1. 在 vmlist 中查找对应的 vm_struct（须为 VM_ALLOC 类型）
+ *   2. 遍历 PTE，读出每页的 PFN，归还伙伴系统
+ *   3. 清除 PTE 条目，刷新 TLB
+ *   4. 从链表移除并释放 vm_struct
+ *
+ * 参考 mm/vmalloc.c vfree()（Linux 2.6.20）
+ */
+void vfree(void *addr)
+{
+    struct vm_struct **p, *area;
+    unsigned long vaddr, vaddr_end;
+
+    if (!addr)
+        return;
+
+    vaddr = (unsigned long)addr & PAGE_MASK;
+
+    /* 在链表中查找 */
+    for (p = &vmlist; *p; p = &(*p)->next) {
+        if ((unsigned long)(*p)->addr == vaddr)
+            break;
+    }
+
+    if (!*p) {
+        printk("vfree: address %p not found in vmalloc list\n", addr);
+        return;
+    }
+
+    area = *p;
+    if (!(area->flags & VM_ALLOC)) {
+        printk("vfree: address %p is not a vmalloc region\n", addr);
+        return;
+    }
+
+    vaddr     = (unsigned long)area->addr;
+    vaddr_end = vaddr + area->size;
+
+    /* 读 PTE 获取 PFN，归还物理页，并清除 PTE */
+    while (vaddr < vaddr_end) {
+        pgd_t *pgd = pgd_offset(swapper_pg_dir, vaddr);
+        if (!pgd_none(*pgd)) {
+            pte_t *pte = pte_offset(pgd, vaddr);
+            if (pte_present(*pte)) {
+                unsigned long pfn = pte_val(*pte) >> PAGE_SHIFT;
+                __free_page(mem_map + pfn);
+            }
             set_pte(pte, __pte(0));
             __flush_tlb_one(vaddr);
         }

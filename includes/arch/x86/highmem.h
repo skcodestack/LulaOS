@@ -85,4 +85,17 @@ void *ioremap(unsigned long phys_addr, unsigned long size);
 void *ioremap_nocache(unsigned long phys_addr, unsigned long size);
 void  iounmap(void *addr);
 
+/**
+ *
+ *  vmalloc - 分配物理不连续、虚拟连续的内核内存
+ *
+ *  每页独立从伙伴系统分配，映射到 vmalloc 区连续虚拟地址。
+ *  适合需要大块连续虚拟地址但不要求物理连续的场景。
+ *  分配出的内存未清零，调用方需自行初始化。
+ *
+ *  vfree: 释放 vmalloc 分配的内存（读 PTE 获取 PFN 并归还伙伴系统）
+ */
+void *vmalloc(unsigned long size);
+void  vfree(void *addr);
+
 #endif
