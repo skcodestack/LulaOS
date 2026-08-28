@@ -769,13 +769,13 @@ void acpi_register_platform_devices(void)
         pdev->dev.name[DEVICE_NAME_SIZE - 1] = '\0';
         pdev->id = -1;
 
-        /* 复制资源 */
+        /* 复制资源：将 resource 指针指向预分配的静态数组 */
         pdev->num_resources = adev->num_resources;
+        pdev->resource = acpi_plat_res[acpi_plat_dev_count];
         for (j = 0; j < adev->num_resources; j++) {
-            acpi_plat_res[acpi_plat_dev_count][j].start = adev->resource[j].start;
-            acpi_plat_res[acpi_plat_dev_count][j].end = adev->resource[j].end;
-            acpi_plat_res[acpi_plat_dev_count][j].flags = adev->resource[j].flags;
-            pdev->resource[j] = acpi_plat_res[acpi_plat_dev_count][j];
+            pdev->resource[j].start = adev->resource[j].start;
+            pdev->resource[j].end   = adev->resource[j].end;
+            pdev->resource[j].flags = adev->resource[j].flags;
         }
 
         platform_device_register(pdev);

@@ -45,7 +45,7 @@ struct platform_device {
     struct device dev;              /* 必须作为第一个成员嵌入 */
     int id;                         /* 设备实例 ID（-1 表示唯一设备） */
     int num_resources;
-    struct platform_resource resource[PLATFORM_MAX_RESOURCES];
+    struct platform_resource *resource;  /* 指向资源数组（可为静态或动态分配） */
 };
 
 /*

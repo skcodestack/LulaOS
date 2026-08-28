@@ -139,7 +139,7 @@ static int i8042_controller_init(void)
     resp = i8042_read_response();
     if (resp != 0x55) {
         printk("i8042: self-test failed (got %#x, expected 0x55)\n", resp);
-        return -1;
+        goto no_mouse;
     }
     printk("i8042: controller self-test OK\n");
 
