@@ -591,8 +591,9 @@ static void aml_scan_device_attrs(struct aml_scan_ctx *ctx,
                 memcpy(ctx->cur_res, sv_res, sizeof(ctx->cur_res));
                 continue;
             } else if (ext_op == AML_MUTEX_OP || ext_op == AML_EVENT_OP) {
-                /* Mutex/Event：NameSeg + 同步标志，固定 7 字节 */
-                p += 7;
+                /* Mutex: [0x5B][0x01][NameSeg(4)][SyncFlags(1)] = 6字节
+                 * Event: [0x5B][0x02][NameSeg(4)]              = 6字节 */
+                p += 6;
                 continue;
             } else if (ext_op == AML_FIELD_OP ||
                        ext_op == AML_INDEXFIELD_OP ||
@@ -608,11 +609,14 @@ static void aml_scan_device_attrs(struct aml_scan_ctx *ctx,
         }
 
         if (op == AML_SCOPE_OP) {
-            /* Scope：保存父设备上下文，然后递归进入 */
+            /*
+             * Primary Scope：[0x10][PkgLength][NameString][TermList]
+             * scope_end = (p+1) + pkg_len = p + 1 + pkg_len
+             */
             int pkg_c;
             uint32_t plen = aml_parse_pkg_length(p + 1, dev_end, &pkg_c);
-            const uint8_t *scope_body = p + 1 + pkg_c;
-            const uint8_t *scope_end = p + plen;
+            const uint8_t *after_pkglen = p + 1 + pkg_c;
+            const uint8_t *scope_end    = p + 1 + plen;
             if (scope_end > dev_end) scope_end = dev_end;
             /* 保存当前设备上下文，扫描完 Scope 后恢复 */
             char save_name[ACPI_DEV_NAME_SIZE];
@@ -625,8 +629,14 @@ static void aml_scan_device_attrs(struct aml_scan_ctx *ctx,
             strncpy(save_hid,  ctx->cur_hid,  ACPI_HID_SIZE);
             strncpy(save_cid,  ctx->cur_cid,  ACPI_HID_SIZE);
             memcpy(save_res, ctx->cur_res, sizeof(ctx->cur_res));
+            /* 跳过 NameString 找到 TermList */
+            char tmp_name[ACPI_DEV_NAME_SIZE];
+            int ns_consumed = aml_parse_namestring(after_pkglen, tmp_name,
+                                                    sizeof(tmp_name));
+            const uint8_t *term_list = after_pkglen + ns_consumed;
             /* 递归扫描 Scope 内部命名空间（任意深度） */
-            aml_scan_namespace_level(ctx, scope_body, scope_end);
+            if (term_list < scope_end)
+                aml_scan_namespace_level(ctx, term_list, scope_end);
             /* 恢复父设备上下文 */
             strncpy(ctx->cur_dev_name, save_name, ACPI_DEV_NAME_SIZE);
             strncpy(ctx->cur_hid, save_hid, ACPI_HID_SIZE);
@@ -710,20 +720,35 @@ static void aml_scan_namespace_level(struct aml_scan_ctx *ctx,
                            ctx->cur_dev_name, ctx->cur_hid, ctx->cur_cid,
                            ctx->cur_num_res);
                 }
-                /* 跳过已扫描的设备对象 */
+                /*
+                 * 跳过已扫描的设备对象
+                 * PkgLength = 从 PkgLeadByte 到内容末尾的总字节数
+                 * 构造起始 = p (ExtOp)    PkgLength 起始 = p+2
+                 * 下一个对象 = p + 2 + pkg_len
+                 */
                 int pkg_c;
                 uint32_t plen = aml_parse_pkg_length(p + 2, end, &pkg_c);
                 p = p + 2 + plen;
                 continue;
+
             } else if (ext_op == AML_SCOPE_OP) {
-                /* Scope：递归进入 */
+                /*
+                 * ExtOp + ScopeOp：
+                 *   [0x5B][0x80][PkgLength][NameString][TermList]
+                 * scope_end = p + 2 + pkg_len  (PkgLength 含自身编码字节)
+                 */
                 int pkg_c;
                 uint32_t plen = aml_parse_pkg_length(p + 2, end, &pkg_c);
-                const uint8_t *scope_body = p + 2 + pkg_c;
-                const uint8_t *scope_end  = p + 2 + plen;
+                const uint8_t *after_pkglen = p + 2 + pkg_c;
+                const uint8_t *scope_end    = p + 2 + plen;
                 if (scope_end > end) scope_end = end;
-                /* 递归扫描 Scope 内部命名空间 */
-                aml_scan_namespace_level(ctx, scope_body, scope_end);
+                /* 跳过 NameString 找到 TermList 起始位置 */
+                char tmp_name[ACPI_DEV_NAME_SIZE];
+                int ns_consumed = aml_parse_namestring(after_pkglen, tmp_name,
+                                                        sizeof(tmp_name));
+                const uint8_t *term_list = after_pkglen + ns_consumed;
+                if (term_list < scope_end)
+                    aml_scan_namespace_level(ctx, term_list, scope_end);
                 p = scope_end;
                 continue;
             }
@@ -732,14 +757,24 @@ static void aml_scan_namespace_level(struct aml_scan_ctx *ctx,
         }
 
         if (op == AML_SCOPE_OP) {
-            /* Primary Scope（无 ExtOpPrefix） */
+            /*
+             * Primary Scope（无 ExtOpPrefix）：
+             *   [0x10][PkgLength][NameString][TermList]
+             * PkgLength 从 p+1 开始，总长度含自身编码
+             * scope_end = (p+1) + pkg_len = p + 1 + pkg_len
+             */
             int pkg_c;
             uint32_t plen = aml_parse_pkg_length(p + 1, end, &pkg_c);
-            const uint8_t *scope_body = p + 1 + pkg_c;
-            const uint8_t *scope_end  = p + plen;
+            const uint8_t *after_pkglen = p + 1 + pkg_c;
+            const uint8_t *scope_end    = p + 1 + plen;
             if (scope_end > end) scope_end = end;
-            /* 递归进入 Scope */
-            aml_scan_namespace_level(ctx, scope_body, scope_end);
+            /* 跳过 NameString 找到 TermList 起始位置 */
+            char tmp_name[ACPI_DEV_NAME_SIZE];
+            int ns_consumed = aml_parse_namestring(after_pkglen, tmp_name,
+                                                    sizeof(tmp_name));
+            const uint8_t *term_list = after_pkglen + ns_consumed;
+            if (term_list < scope_end)
+                aml_scan_namespace_level(ctx, term_list, scope_end);
             p = scope_end;
             continue;
         }
