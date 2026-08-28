@@ -99,6 +99,48 @@ struct acpi_table_rsdt {
 } __attribute__ ((packed));
 
 
+/* FADT (Fixed ACPI Description Table) */
+struct acpi_table_fadt {
+	acpi_table_header header;
+	uint32_t facs;                    /* Firmware ACPI Control Structure 物理地址 */
+	uint32_t dsdt;                    /* Differentiated System Description Table 物理地址 */
+	uint8_t  reserved1;               /* INT_MODEL */
+	uint8_t  preferred_pm_profile;    /* Preferred Power Management Profile */
+	uint16_t sci_int;                 /* SCI 中断号（GSI） */
+	uint32_t smi_cmd;                 /* SMI 命令端口 */
+	uint8_t  acpi_enable;
+	uint8_t  acpi_disable;
+	uint8_t  s4bios_req;
+	uint8_t  pstate_cnt;
+	uint32_t pm1a_evt_blk;            /* PM1a Event Block I/O 端口 */
+	uint32_t pm1b_evt_blk;
+	uint32_t pm1a_cnt_blk;            /* PM1a Control Block I/O 端口 */
+	uint32_t pm1b_cnt_blk;
+	uint32_t pm2_cnt_blk;
+	uint32_t pm_tmr_blk;              /* PM Timer I/O 端口 */
+	uint32_t gpe0_blk;
+	uint32_t gpe1_blk;
+	uint8_t  pm1_evt_len;
+	uint8_t  pm1_cnt_len;
+	uint8_t  pm2_cnt_len;
+	uint8_t  pm_tmr_len;
+	uint8_t  gpe0_blk_len;
+	uint8_t  gpe1_blk_len;
+	uint8_t  gpe1_base;
+	uint8_t  cst_cnt;
+	uint16_t p_lvl2_lat;
+	uint16_t p_lvl3_lat;
+	uint16_t flush_size;
+	uint16_t flush_stride;
+	uint8_t  duty_offset;
+	uint8_t  duty_width;
+	uint8_t  day_alrm;
+	uint8_t  mon_alrm;
+	uint8_t  century;
+	/* ACPI 2.0+ 扩展字段省略 */
+} __attribute__ ((packed));
+
+
 
 
 //apic 
@@ -157,6 +199,26 @@ struct acpi_table_int_src_ovr {
 #define ACPI_MAX_IOAPIC        8
 #define ACPI_MAX_INT_SRC_OVR  32
 
+/* ACPI DSDT 设备描述 */
+#define ACPI_MAX_DSDT_DEVICES   32
+#define ACPI_DEV_NAME_SIZE      8
+#define ACPI_HID_SIZE           16
+#define ACPI_MAX_CRS_RESOURCES  6
+
+struct acpi_resource_info {
+    uint32_t start;
+    uint32_t end;
+    uint32_t flags;    /* IORESOURCE_IO / IORESOURCE_MEM / IORESOURCE_IRQ */
+};
+
+struct acpi_dsdt_device {
+    char name[ACPI_DEV_NAME_SIZE];              /* AML 设备名，如 "PS2K" */
+    char hid[ACPI_HID_SIZE];                    /* _HID 字符串，如 "PNP0303" */
+    char cid[ACPI_HID_SIZE];                    /* _CID 字符串 */
+    int num_resources;
+    struct acpi_resource_info resource[ACPI_MAX_CRS_RESOURCES];
+};
+
 typedef struct {
  uint32_t lapic_address;
  uint32_t lapic_count;
@@ -165,11 +227,27 @@ typedef struct {
  struct acpi_table_lapic       lapics[ACPI_MAX_LAPIC];
  struct acpi_table_ioapic      ioapics[ACPI_MAX_IOAPIC];
  struct acpi_table_int_src_ovr int_src_ovrs[ACPI_MAX_INT_SRC_OVR];
+
+ /* FADT 信息 */
+ uint32_t dsdt_address;
+ uint32_t fadt_address;
+ uint16_t sci_int;             /* SCI 中断号 */
+ uint32_t pm_tmr_blk;          /* PM Timer I/O 端口 */
+
+ /* DSDT 枚举到的设备 */
+ uint32_t dsdt_device_count;
+ struct acpi_dsdt_device dsdt_devices[ACPI_MAX_DSDT_DEVICES];
 } acpi_table_context;
 
-acpi_table_context acpi_context;
+extern acpi_table_context acpi_context;
+
+/* ACPI 物理地址映射（arch/x86/kernel/acpi.c） */
+char *_rang_mapping(unsigned long addr, unsigned long size);
 
 __init void  acpi_tables_init();
+
+/* ACPI Platform 设备注册（kernel/device/acpi_dev.c） */
+void acpi_register_platform_devices(void);
 
 // 根据 GSI 查找对应的 IOAPIC 索引
 // 返回 -1 表示未找到

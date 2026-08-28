@@ -15,6 +15,8 @@
 #include <kernel/softirq.h>
 #include <keyboard.h>
 #include <mouse.h>
+#include <i8042.h>
+#include <arch/x86/acpi.h>
 #include <pci/pci.h>
  
 void _kernel_init()
@@ -83,10 +85,16 @@ asmlinkage void _kernel_main()
     /* 注册 Platform 总线（键盘/鼠标等设备挂在此总线上） */
     platform_bus_init();
 
-    /* 注册 Platform 设备：键盘 */
+    /* ACPI DSDT 枚举：扫描 AML 发现 Platform 设备（PNP0303/PNP0F13 等） */
+    acpi_register_platform_devices();
+
+    /* PS/2 控制器初始化（注册 i8042 设备+驱动，probe 完成硬件初始化） */
+    i8042_init();
+
+    /* 注册键盘驱动（匹配 ACPI 发现的 PNP0303 设备） */
     keyboard_init();
 
-    /* 注册 Platform 设备：鼠标 */
+    /* 注册鼠标驱动（匹配 ACPI 发现的 PNP0F13 设备） */
     mouse_init();
 
     /* PCI 总线枚举（需要 kmalloc 就绪） */

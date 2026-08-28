@@ -180,24 +180,17 @@ static void keyboard_handler(int irq, void *dev_id, struct pt_regs *regs)
     /* 功能键/修饰键（ch=='\0'）：静默忽略 */
 }
 
-/* ========== Platform 设备/驱动定义 ========== */
-
-static struct platform_resource kbd_resources[] = {
-    { .start = KBD_DATA_PORT, .end = KBD_STATUS_PORT, .flags = IORESOURCE_IO },
-    { .start = KEYBOARD_VECTOR, .end = KEYBOARD_VECTOR, .flags = IORESOURCE_IRQ },
-};
-
-static struct platform_device keyboard_device = {
-    .dev.name = "ps2-keyboard",
-    .id = -1,
-    .resource = kbd_resources,
-    .num_resources = 2,
-};
+/* ========== Platform 驱动定义 ==========
+ *
+ * 键盘 Platform 设备由 ACPI DSDT 枚举（HID=PNP0303）或
+ * i8042 控制器驱动注册。本驱动只负责匹配设备并注册中断处理函数。
+ */
 
 /*
  * keyboard_probe - 键盘 Platform 驱动 probe
  *
  * 匹配成功后注册键盘中断处理函数。
+ * 此时 i8042 控制器已完成初始化，键盘端口可用。
  */
 static int keyboard_probe(struct platform_device *pdev)
 {
@@ -212,18 +205,17 @@ static int keyboard_probe(struct platform_device *pdev)
 }
 
 static struct platform_driver keyboard_driver = {
-    .driver.name = "ps2-keyboard",
+    .driver.name = "PNP0303",   /* ACPI 键盘 HID */
     .probe = keyboard_probe,
 };
 
 /*
- * keyboard_init - 注册键盘 Platform 设备和驱动
+ * keyboard_init - 注册键盘 Platform 驱动
  *
- * 在统一设备模型下，设备与驱动通过名称匹配，匹配成功后
- * 自动调用 keyboard_probe() 注册中断。
+ * 设备由 ACPI DSDT 枚举或 i8042 控制器注册，本函数只注册驱动。
+ * 匹配成功后自动调用 keyboard_probe() 注册中断。
  */
 void keyboard_init(void)
 {
-    platform_device_register(&keyboard_device);
     platform_driver_register(&keyboard_driver);
 }

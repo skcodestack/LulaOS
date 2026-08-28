@@ -13,7 +13,7 @@ typedef int (*acpi_table_handler) (unsigned long , unsigned long);
 acpi_table_handler handles[ACPI_TABLE_COUNT] = {NULL};
 
 
-static char * __init _rang_mapping (unsigned long addr,unsigned long size){
+char * __init _rang_mapping (unsigned long addr,unsigned long size){
     unsigned long map_phys = addr;
     unsigned long map_size;
     int idx = FIX_ACPI_BEGIN;
@@ -172,10 +172,39 @@ static int __init acpi_parse_madt(unsigned long len, unsigned long phys)
     return 0;
 }
 
+/*
+ * acpi_parse_fadt - 解析 FADT 表
+ *
+ * FADT 包含固定的 ACPI 硬件信息：
+ *   - DSDT 物理地址
+ *   - SCI 中断号
+ *   - PM Timer / PM1 Event 端口地址
+ */
+static int __init acpi_parse_fadt(unsigned long len, unsigned long phys)
+{
+    struct acpi_table_fadt *fadt;
+
+    fadt = (struct acpi_table_fadt *)_rang_mapping(phys, len);
+    if (!fadt)
+        return -1;
+
+    acpi_context.fadt_address = phys;
+    acpi_context.dsdt_address = fadt->dsdt;
+    acpi_context.sci_int      = fadt->sci_int;
+    acpi_context.pm_tmr_blk   = fadt->pm_tmr_blk;
+
+    printk("ACPI FADT: dsdt=%x sci_int=%d pm_tmr=%x pm1a_evt=%x pm1a_cnt=%x\n",
+           fadt->dsdt, fadt->sci_int, fadt->pm_tmr_blk,
+           fadt->pm1a_evt_blk, fadt->pm1a_cnt_blk);
+
+    return 0;
+}
+
 __init void  acpi_tables_init(){
 
     //set apic process func
     handles[ACPI_APIC] = acpi_parse_madt;
+    handles[ACPI_FACP] = acpi_parse_fadt;
 
 
     struct acpi_table_rsdp *rsdp = NULL;

@@ -26,95 +26,13 @@
 /* PS/2 控制器 I/O 端口 */
 #define PS2_DATA_PORT    0x60   /* 数据端口（键盘/鼠标共用） */
 #define PS2_STATUS_PORT  0x64   /* 状态寄存器端口 */
-#define PS2_CMD_PORT     0x64   /* 命令端口（写） */
 
 /* 鼠标中断向量：ISA IRQ12 → GSI 12 → FIRST_DEVICE_VECTOR+12 */
 #define MOUSE_VECTOR     (FIRST_DEVICE_VECTOR + 12)   /* 0x3D */
 
-/* PS/2 控制器命令 */
-#define PS2_CMD_ENABLE_AUX    0xA8   /* 启用 AUX（鼠标）端口 */
-#define PS2_CMD_READ_CFG      0x20   /* 读取配置字节 */
-#define PS2_CMD_WRITE_CFG     0x60   /* 写入配置字节 */
-#define PS2_CMD_WRITE_MOUSE   0xD4   /* 下一字节发往鼠标 */
-
-/* 鼠标命令（需通过 0xD4 前缀发送） */
-#define MOUSE_CMD_ENABLE      0xF4   /* 启用数据上报 */
-#define MOUSE_CMD_SET_DEFAULTS 0xF6  /* 恢复默认设置（100 采样/秒，4:1 缩放） */
-
 /* 数据包解析状态机 */
 static unsigned char mouse_cycle = 0;    /* 当前字节序号 0/1/2 */
 static signed char   mouse_byte[3];      /* 3 字节缓冲区 */
-
-/* ========== PS/2 端口辅助函数 ========== */
-
-/* 等待超时计数（防止死循环） */
-#define PS2_TIMEOUT  100000
-
-/*
- * ps2_wait_input - 等待 PS/2 控制器输入缓冲区空闲
- *
- * 状态寄存器 bit1=1 表示输入缓冲区满（不可写入），
- * 循环等待直到 bit1=0。
- * 返回：0 成功，-1 超时
- */
-static int ps2_wait_input(void)
-{
-    int timeout = PS2_TIMEOUT;
-    while (inb(PS2_STATUS_PORT) & 0x02) {
-        if (--timeout <= 0)
-            return -1;
-    }
-    return 0;
-}
-
-/*
- * ps2_wait_output - 等待 PS/2 控制器输出缓冲区就绪
- *
- * 状态寄存器 bit0=1 表示输出缓冲区有数据可读，
- * 循环等待直到 bit0=1。
- * 返回：0 成功，-1 超时
- */
-static int ps2_wait_output(void)
-{
-    int timeout = PS2_TIMEOUT;
-    while (!(inb(PS2_STATUS_PORT) & 0x01)) {
-        if (--timeout <= 0)
-            return -1;
-    }
-    return 0;
-}
-
-/*
- * mouse_send_cmd - 向鼠标发送命令字节
- *
- * PS/2 控制器端口 0x60 默认与键盘通信，向鼠标发命令需要
- * 先发送 0xD4 前缀，控制器才会将下一字节转发给鼠标。
- * 返回：0 成功，-1 超时
- */
-static int mouse_send_cmd(unsigned char cmd)
-{
-    if (ps2_wait_input() < 0)
-        return -1;
-    outb(PS2_CMD_PORT, PS2_CMD_WRITE_MOUSE);   /* 告诉控制器：下一字节发鼠标 */
-    if (ps2_wait_input() < 0)
-        return -1;
-    outb(PS2_DATA_PORT, cmd);                    /* 发送实际命令 */
-    return 0;
-}
-
-/*
- * mouse_read_response - 读取鼠标响应字节
- *
- * 等待输出缓冲区就绪后读取数据端口。
- * 正常 ACK 响应为 0xFA。
- * 返回：响应字节，或 -1 超时
- */
-static int mouse_read_response(void)
-{
-    if (ps2_wait_output() < 0)
-        return -1;
-    return (int)inb(PS2_DATA_PORT);
-}
 
 /* ========== 中断处理函数 ========== */
 
@@ -193,101 +111,42 @@ static void mouse_handler(int irq, void *dev_id, struct pt_regs *regs)
     }
 }
 
-/* ========== 初始化 ========== */
-
-/* ========== Platform 设备/驱动定义 ========== */
-
-static struct platform_resource mouse_resources[] = {
-    { .start = PS2_DATA_PORT, .end = PS2_CMD_PORT, .flags = IORESOURCE_IO },
-    { .start = MOUSE_VECTOR, .end = MOUSE_VECTOR, .flags = IORESOURCE_IRQ },
-};
-
-static struct platform_device mouse_device = {
-    .dev.name = "ps2-mouse",
-    .id = -1,
-    .resource = mouse_resources,
-    .num_resources = 2,
-};
+/* ========== Platform 驱动定义 ==========
+ *
+ * 鼠标 Platform 设备由 ACPI DSDT 枚举（HID=PNP0F13）或
+ * i8042 控制器驱动注册。本驱动只负责匹配设备并注册中断处理函数。
+ * PS/2 控制器的全部硬件初始化已在 i8042_probe() 中完成。
+ */
 
 /*
  * mouse_probe - 鼠标 Platform 驱动 probe
  *
- * 匹配成功后初始化 PS/2 鼠标并注册中断。
+ * 匹配成功后注册鼠标中断处理函数。
+ * 此时 i8042 控制器已完成初始化，鼠标端口可用。
  */
 static int mouse_probe(struct platform_device *pdev)
 {
-    unsigned char cfg;
-    int ret;
-    int resp;
-
-    /* 1. 启用 AUX（鼠标）端口 */
-    if (ps2_wait_input() < 0) {
-        printk("mouse: PS/2 controller not ready, skip init\n");
-        return -1;
-    }
-    outb(PS2_CMD_PORT, PS2_CMD_ENABLE_AUX);
-
-    /* 2. 读-改-写配置字节：开启 AUX 中断 */
-    if (ps2_wait_input() < 0)
-        goto fail;
-    outb(PS2_CMD_PORT, PS2_CMD_READ_CFG);
-    resp = mouse_read_response();
-    if (resp < 0)
-        goto fail;
-    cfg = (unsigned char)resp;
-
-    cfg |= 0x02;    /* bit1=1: 开启 AUX 端口中断（IRQ12） */
-    cfg &= ~0x20;   /* bit5=0: 确保鼠标时钟未禁用 */
-
-    if (ps2_wait_input() < 0)
-        goto fail;
-    outb(PS2_CMD_PORT, PS2_CMD_WRITE_CFG);
-    if (ps2_wait_input() < 0)
-        goto fail;
-    outb(PS2_DATA_PORT, cfg);
-
-    /* 3. 向鼠标发送 SET_DEFAULTS */
-    if (mouse_send_cmd(MOUSE_CMD_SET_DEFAULTS) < 0)
-        goto fail;
-    resp = mouse_read_response();
-    if (resp < 0 || (unsigned char)resp != 0xFA) {
-        printk("mouse: no mouse detected (ACK=%#x)\n", resp);
-        goto fail;
-    }
-
-    /* 4. 向鼠标发送 ENABLE（开始上报） */
-    if (mouse_send_cmd(MOUSE_CMD_ENABLE) < 0)
-        goto fail;
-    resp = mouse_read_response();
-    if (resp < 0 || (unsigned char)resp != 0xFA) {
-        printk("mouse: enable failed (ACK=%#x)\n", resp);
-        goto fail;
-    }
-
-    /* 5. 注册 IRQ12 处理函数 */
-    ret = request_irq(MOUSE_VECTOR, mouse_handler, "mouse", NULL);
+    int ret = request_irq(MOUSE_VECTOR, mouse_handler, "mouse", NULL);
     if (ret == 0)
         printk("mouse: IRQ12 registered (vector=%#x)\n", MOUSE_VECTOR);
     else
         printk("mouse: failed to register IRQ12 (vector=%#x)\n",
                MOUSE_VECTOR);
     return ret;
-
-fail:
-    printk("mouse: init failed, PS/2 mouse not available\n");
-    return -1;
 }
 
 static struct platform_driver mouse_driver = {
-    .driver.name = "ps2-mouse",
+    .driver.name = "PNP0F13",   /* ACPI 鼠标 HID */
     .probe = mouse_probe,
 };
 
 /*
- * mouse_init - 注册鼠标 Platform 设备和驱动
+ * mouse_init - 注册鼠标 Platform 驱动
+ *
+ * 设备由 ACPI DSDT 枚举或 i8042 控制器注册，本函数只注册驱动。
+ * 匹配成功后自动调用 mouse_probe() 注册中断。
  */
 void mouse_init(void)
 {
-    platform_device_register(&mouse_device);
     platform_driver_register(&mouse_driver);
 }

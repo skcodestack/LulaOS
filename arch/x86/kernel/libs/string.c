@@ -47,6 +47,20 @@ int strncmp(const char * cs,const char * ct,size_t count)
 	return __res;
 }
 
+char *strncpy(char *dest, const char *src, size_t count)
+{
+	char *tmp = dest;
+
+	while (count) {
+		if ((*tmp = *src) != '\0')
+			src++;
+		tmp++;
+		count--;
+	}
+
+	return dest;
+}
+
 void *_memcpy(void *dest, const void *src, uint32_t n)
 {
 	int d0, d1, d2;

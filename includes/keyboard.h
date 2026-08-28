@@ -2,23 +2,22 @@
  * LulaOS PS/2 键盘驱动
  *
  * kernel/keyboard.c：
- *   - ISA IRQ1 → GSI 1 → 向量 FIRST_DEVICE_VECTOR+1 (0x32)
- *   - 通过 request_irq() 注册顶半部处理函数
- *   - 从 I/O 端口 0x60 读取扫描码，转换为 ASCII 后经 printk 输出
- *   - 仅支持 Make Code（按下），Break Code（松开）被忽略
- *   - 扫描码集：Set 1（PC/AT 默认）
+ *   - 仅注册 Platform 驱动（名称 PNP0303）
+ *   - 设备由 ACPI DSDT 枚举或 i8042 控制器回退注册
+ *   - probe 时调用 request_irq() 注册 IRQ1 处理函数
+ *   - PS/2 控制器初始化已在 i8042_probe() 中完成
  */
 
 #ifndef __KEYBOARD_H__
 #define __KEYBOARD_H__
 
 /*
- * keyboard_init - 注册键盘中断处理函数
+ * keyboard_init - 注册键盘 Platform 驱动
  *
- * 调用 request_irq() 注册 KEYBOARD_VECTOR (0x32) 的处理函数，
- * 成功后 IOAPIC RTE 自动解除屏蔽，键盘中断开始触发。
+ * 只注册驱动，不注册设备。设备由 ACPI 或 i8042 控制器提供。
+ * 匹配成功后自动调用 keyboard_probe() 注册中断。
  *
- * 须在 _init_interrupts()（IOAPIC 初始化完毕）之后调用。
+ * 须在 i8042_init()（控制器初始化完毕）之后调用。
  */
 void keyboard_init(void);
 

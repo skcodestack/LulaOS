@@ -8,6 +8,7 @@
 
 #include <device/device.h>
 #include <printk.h>
+#include <stddef.h>
 
 /* 全局总线链表 */
 static LIST_HEAD(bus_list);
