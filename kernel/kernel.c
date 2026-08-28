@@ -18,6 +18,8 @@
 #include <i8042.h>
 #include <arch/x86/acpi.h>
 #include <pci/pci.h>
+#include <usb/usb.h>
+#include <usb/uhci.h>
  
 void _kernel_init()
 {
@@ -99,6 +101,12 @@ asmlinkage void _kernel_main()
 
     /* PCI 总线枚举（需要 kmalloc 就绪） */
     pci_init();
+
+    /* USB 总线注册（注册 usb_bus_type，须先于 UHCI 驱动） */
+    usb_init();
+
+    /* UHCI 主机控制器 PCI 驱动（发现并初始化 UHCI 控制器，创建 Root Hub） */
+    uhci_init();
 
     /*
      * 切换到 init_thread_union 内核栈并进入 idle 循环

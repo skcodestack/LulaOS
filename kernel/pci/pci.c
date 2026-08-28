@@ -176,7 +176,7 @@ static const struct pci_device_id *pci_match_device(
             match = 0;
         if (ids->device && ids->device != dev->device)
             match = 0;
-        if (ids->class && ids->class != (dev->class >> 8))
+        if (ids->class && ids->class != dev->class)
             match = 0;
 
         if (match)
