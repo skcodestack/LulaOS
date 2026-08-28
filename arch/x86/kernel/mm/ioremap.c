@@ -1,0 +1,310 @@
+/*
+ * LulaOS ioremap 实现
+ *
+ * 参考 arch/i386/mm/ioremap.c 和 lib/ioremap.c（Linux 2.6.20）
+ *
+ * 功能：将任意物理地址范围映射到内核虚拟地址空间，供 MMIO 访问。
+ *
+ * 虚拟地址空间布局：
+ *   0xC0000000 ~ 0xF7FFFFFF : 直接映射区（0~896MB，已建立）
+ *   0xF8000000 ~ 0xFDFFFFFF : ioremap/vmalloc 区（本文件使用，96MB）
+ *   0xFE000000 ~ 0xFE3FFFFF : PKMAP 永久映射区
+ *   0xFFC00000 ~ 0xFFFFE000 : Fixmap 固定映射区
+ *
+ * 两级页表（PGD → PTE）：
+ *   - 若目标 PGD 条目为空，分配一页作为 PTE 表并安装
+ *   - 若 PGD 已存在（不应发生在 vmalloc 区），直接定位 PTE
+ *   - 每个 PTE 条目填入物理页帧号 + 保护属性
+ *
+ * 初始化时机：须在 slab 分配器就绪后调用（需要 kmalloc 分配 vm_struct）
+ */
+
+#include <arch/x86/page.h>
+#include <arch/x86/pgtable.h>
+#include <arch/x86/highmem.h>
+#include <mm/mm.h>
+#include <mm/mmzone.h>
+#include <mm/slab.h>
+#include <printk.h>
+#include <libs/memcpy.h>
+
+/* ======================== 常量 ======================== */
+
+#define VMALLOC_START   0xF8000000UL   /* 直接映射区之后 */
+#define VMALLOC_END     0xFE000000UL   /* PKMAP 之前 */
+
+/* ======================== 数据结构 ======================== */
+
+/*
+ * vm_struct - 已分配的虚拟内存区域描述
+ *
+ * 参考 Linux struct vm_struct（简化版），仅保留 ioremap 所需字段。
+ * 通过链表组织，供 iounmap 查找并释放。
+ */
+struct vm_struct {
+    void            *addr;        /* 映射起始虚拟地址 */
+    unsigned long    size;        /* 映射大小（页对齐后） */
+    unsigned long    phys_addr;   /* 原始物理地址（页对齐后） */
+    struct vm_struct *next;
+};
+
+/* vmalloc 区域链表头及分配游标 */
+static struct vm_struct *vmlist = NULL;
+static unsigned long vmalloc_next = VMALLOC_START;
+
+/* ======================== TLB 刷新 ======================== */
+
+/* 刷新单条 TLB 条目 */
+static inline void __flush_tlb_one(unsigned long addr)
+{
+    __asm__ __volatile__("invlpg (%0)" :: "r"(addr) : "memory");
+}
+
+/* ======================== 虚拟地址区域分配 ======================== */
+
+/*
+ * get_vm_area - 在 vmalloc 区分配连续虚拟地址段
+ *
+ * 采用 bump allocator（线性分配），每次从 vmalloc_next 推进。
+ * 分配段末尾留一页 guard page（不映射），用于捕获越界访问。
+ *
+ * 返回: vm_struct 指针，NULL 表示空间不足或 kmalloc 失败
+ */
+static struct vm_struct *get_vm_area(unsigned long size)
+{
+    unsigned long total, start;
+    struct vm_struct *area;
+
+    /* 加一页 guard page */
+    total = PAGE_ALIGN(size) + PAGE_SIZE;
+    start = vmalloc_next;
+
+    if (start + total > VMALLOC_END || start + total < start) {
+        printk("ioremap: vmalloc area exhausted\n");
+        return NULL;
+    }
+
+    area = kmalloc(sizeof(*area), GFP_KERNEL);
+    if (!area)
+        return NULL;
+
+    area->addr      = (void *)start;
+    area->size      = PAGE_ALIGN(size);
+    area->phys_addr = 0;
+    area->next      = vmlist;
+    vmlist          = area;
+
+    vmalloc_next = start + total;
+    return area;
+}
+
+/* ======================== 页表映射 ======================== */
+
+/*
+ * ioremap_pte_range - 填充 PTE 条目，建立物理→虚拟映射
+ *
+ * 若 PTE 所在页表尚未分配（PGD 为空），先分配一页清零后安装到 PGD。
+ * 然后逐页填入物理页帧号 + 保护属性。
+ */
+static int ioremap_pte_range(pgd_t *pgd, unsigned long addr,
+                              unsigned long end, unsigned long phys_addr,
+                              pgprot_t prot)
+{
+    pte_t *pte;
+
+    /* 若 PGD 条目为空，分配一页作为 PTE 表 */
+    if (pgd_none(*pgd)) {
+        struct page *ptepage = __alloc_pages(0, 0);
+        if (!ptepage) {
+            printk("ioremap: cannot allocate PTE page for addr=%#lx\n", addr);
+            return -1;
+        }
+        unsigned long pfn  = (unsigned long)(ptepage - mem_map);
+        pte_t *pte_base    = (pte_t *)__va(pfn << PAGE_SHIFT);
+        memset(pte_base, 0, PAGE_SIZE);
+        set_pgd(pgd, __pgd(__pa(pte_base) + _KERNPG_TABLE));
+    }
+
+    /* 定位 PTE 并逐页填入映射 */
+    pte = pte_offset(pgd, addr);
+    do {
+        unsigned long pfn = phys_addr >> PAGE_SHIFT;
+        set_pte(pte, __mk_pte(pfn, prot));
+        phys_addr += PAGE_SIZE;
+    } while (pte++, addr += PAGE_SIZE, addr < end);
+
+    return 0;
+}
+
+/*
+ * ioremap_page_range - 在 swapper_pg_dir 中建立虚拟→物理映射
+ *
+ * 遍历 [addr, end) 的每个 4MB PGD 块，调用 ioremap_pte_range()。
+ * 完成后刷新 TLB。
+ *
+ * 参考 lib/ioremap.c ioremap_page_range()（两级页表简化版）
+ */
+static int ioremap_page_range(unsigned long addr, unsigned long end,
+                               unsigned long phys_addr, pgprot_t prot)
+{
+    pgd_t *pgd;
+    unsigned long next;
+
+    pgd = pgd_offset(swapper_pg_dir, addr);
+    do {
+        /* 当前 PGD 块的结束地址 */
+        next = (addr + PGDIR_SIZE) & PGDIR_MASK;
+        if (next > end || next < addr)
+            next = end;
+
+        if (ioremap_pte_range(pgd, addr, next, phys_addr, prot))
+            return -1;
+
+        phys_addr += (next - addr);
+        addr = next;
+    } while (pgd++, addr < end);
+
+    /* 刷新整个 TLB，确保所有 CPU 看到新映射 */
+    __asm__ __volatile__(
+        "movl %%cr3, %%eax\n\t"
+        "movl %%eax, %%cr3"
+        ::: "eax", "memory"
+    );
+
+    return 0;
+}
+
+/* ======================== 公共 API ======================== */
+
+/*
+ * ioremap - 将物理地址映射到内核虚拟地址空间
+ *
+ * 参考 arch/i386/mm/ioremap.c __ioremap()
+ *
+ * phys_addr: 物理地址（无需页对齐，内部自动处理偏移）
+ * size:      映射大小（字节）
+ *
+ * 返回: 可直接读写的内核虚拟地址，NULL 表示失败
+ *
+ * 注意：
+ *   - 映射默认禁用缓存（_PAGE_PCD），适合 MMIO 访问
+ *   - 若物理地址在直接映射区（<896MB），直接返回 __va() 结果
+ *   - 释放使用 iounmap()
+ */
+void *ioremap(unsigned long phys_addr, unsigned long size)
+{
+    unsigned long offset, last_addr;
+    unsigned long aligned_phys, aligned_size;
+    struct vm_struct *area;
+    pgprot_t prot;
+
+    /* ① 合法性检查 */
+    if (!size)
+        return NULL;
+    last_addr = phys_addr + size - 1;
+    if (last_addr < phys_addr)   /* 溢出 */
+        return NULL;
+
+    /* ② 物理地址在直接映射区（<896MB），无需重映射
+     *
+     * high_memory 是直接映射区末尾的虚拟地址（如 0xF8000000）。
+     * 减去 PAGE_OFFSET 得到直接映射的物理上限（如 0x38000000 = 896MB）。
+     * 此写法比 __va(phys_addr) < high_memory 安全，
+     * 避免 phys_addr > 3GB 时 __va() 在 32 位下溢出回绕。
+     */
+    if (last_addr < (unsigned long)high_memory - PAGE_OFFSET)
+        return __va(phys_addr);
+
+    /* ③ 保存页内偏移，对齐到页边界 */
+    offset       = phys_addr & ~PAGE_MASK;
+    aligned_phys = phys_addr & PAGE_MASK;
+    aligned_size = PAGE_ALIGN(last_addr + 1) - aligned_phys;
+
+    /* ④ 分配虚拟地址段 */
+    area = get_vm_area(aligned_size);
+    if (!area)
+        return NULL;
+    area->phys_addr = aligned_phys;
+
+    /* ⑤ 构造保护位：Present + RW + Dirty + Accessed + PCD（禁用缓存） */
+    prot = __pgprot(_PAGE_PRESENT | _PAGE_RW | _PAGE_DIRTY
+                    | _PAGE_ACCESSED | _PAGE_PCD);
+
+    /* ⑥ 建立页表映射 */
+    if (ioremap_page_range((unsigned long)area->addr,
+                           (unsigned long)area->addr + aligned_size,
+                           aligned_phys, prot)) {
+        printk("ioremap: failed to map phys=%#lx size=%#lx\n",
+               phys_addr, size);
+        return NULL;
+    }
+
+    printk("ioremap: phys=%#lx size=%#lx -> virt=%p\n",
+           aligned_phys, aligned_size, area->addr);
+
+    /* ⑦ 加上原始页内偏移返回 */
+    return (void *)((unsigned long)area->addr + offset);
+}
+
+/*
+ * ioremap_nocache - 映射 IO 内存（禁用缓存）
+ *
+ * 在 LulaOS 中 ioremap 默认即为 nocache（_PAGE_PCD），直接转发。
+ */
+void *ioremap_nocache(unsigned long phys_addr, unsigned long size)
+{
+    return ioremap(phys_addr, size);
+}
+
+/*
+ * iounmap - 释放 ioremap 建立的映射
+ *
+ * 流程：
+ *   1. 在 vmlist 中查找对应的 vm_struct
+ *   2. 清除对应的所有 PTE 条目（解除映射）
+ *   3. 刷新 TLB
+ *   4. 从链表中移除并释放 vm_struct
+ *
+ * 注意：PTE 页表页本身暂不回收（避免复杂性），虚拟地址也不回收（bump allocator）
+ */
+void iounmap(void *addr)
+{
+    struct vm_struct **p, *area;
+    unsigned long vaddr, vaddr_end;
+
+    if (!addr)
+        return;
+
+    /* 页对齐虚拟地址 */
+    vaddr = (unsigned long)addr & PAGE_MASK;
+
+    /* 在链表中查找 */
+    for (p = &vmlist; *p; p = &(*p)->next) {
+        if ((unsigned long)(*p)->addr == vaddr)
+            break;
+    }
+
+    if (!*p) {
+        printk("iounmap: address %p not found in vmalloc list\n", addr);
+        return;
+    }
+
+    area     = *p;
+    vaddr    = (unsigned long)area->addr;
+    vaddr_end = vaddr + area->size;
+
+    /* 清除所有 PTE 条目（解除映射） */
+    while (vaddr < vaddr_end) {
+        pgd_t *pgd = pgd_offset(swapper_pg_dir, vaddr);
+        if (!pgd_none(*pgd)) {
+            pte_t *pte = pte_offset(pgd, vaddr);
+            set_pte(pte, __pte(0));
+            __flush_tlb_one(vaddr);
+        }
+        vaddr += PAGE_SIZE;
+    }
+
+    /* 从链表移除 */
+    *p = area->next;
+    kfree(area);
+}

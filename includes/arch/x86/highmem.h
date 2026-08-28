@@ -70,4 +70,19 @@ extern pte_t *pkmap_page_table;//永久映射区 对应起始pte 4M大小
 // static inline void *kmap(struct page *page);
 //static inline void kunmap(struct page *page) 
 
+/**
+ *
+ *  ioremap - IO 内存映射（arch/x86/kernel/mm/ioremap.c）
+ *
+ *  将任意物理地址范围映射到内核虚拟地址空间（vmalloc 区），
+ *  用于访问 MMIO 设备寄存器（如 PCI BAR、MMCFG 配置空间等）。
+ *  默认禁用 CPU 缓存（_PAGE_PCD）。
+ *
+ *  ioremap_nocache: 与 ioremap 等价（LulaOS 默认即 nocache）
+ *  iounmap:         释放 ioremap 建立的映射
+ */
+void *ioremap(unsigned long phys_addr, unsigned long size);
+void *ioremap_nocache(unsigned long phys_addr, unsigned long size);
+void  iounmap(void *addr);
+
 #endif
