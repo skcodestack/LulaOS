@@ -420,179 +420,233 @@ static int acpi_parse_crs_buffer(const uint8_t *buf, int buflen,
     return count;
 }
 
+/* ======================== PkgLength 解析 ======================== */
+
+/* 前向声明：命名空间层级扫描（与设备扫描互相递归调用） */
+static void aml_scan_namespace_level(struct aml_scan_ctx *ctx,
+                                      const uint8_t *start,
+                                      const uint8_t *end);
+
+/*
+ * 解析 AML PkgLength，返回总长度（含 PkgLength 编码字节本身）
+ * 同时通过 *consumed 返回编码占用的字节数
+ */
+static uint32_t aml_parse_pkg_length(const uint8_t *p, const uint8_t *end,
+                                      int *consumed)
+{
+    uint8_t lead = *p;
+    uint32_t pkg_len;
+
+    if ((lead & 0xC0) == 0) {
+        /* 单字节：bit7:6 = 00，整个字节即总长度 */
+        *consumed = 1;
+        return (uint32_t)lead;
+    } else {
+        /* 多字节：bit7:6 = 编码字节数（含 lead），bit3:0 = 低位 */
+        int n_bytes = (lead >> 6) & 0x3;   /* 额外字节数 */
+        pkg_len = lead & 0x0F;
+        for (int i = 0; i < n_bytes; i++)
+            pkg_len |= ((uint32_t)p[1 + i]) << (4 + i * 8);
+        *consumed = 1 + n_bytes;
+        return pkg_len;
+    }
+}
+
 /* ======================== 设备节点扫描 ======================== */
 
 /*
- * 在 Device 对象内扫描属性（_HID, _CID, _CRS 等）
- * p 指向 Device 对象的 PkgLength 起始处
+ * 扫描 Device 对象内部（递归扫描子设备，进入子 Scope）
+ * dev_body 指向 PkgLength 的第一个字节
  */
 static void aml_scan_device_attrs(struct aml_scan_ctx *ctx,
-                                   const uint8_t *dev_start,
-                                   const uint8_t *dev_end)
+                                   const uint8_t *dev_body,
+                                   const uint8_t *outer_end)
 {
-    const uint8_t *p = dev_start;
-
     /* 重置当前设备信息 */
     ctx->cur_dev_name[0] = '\0';
     ctx->cur_hid[0] = '\0';
     ctx->cur_cid[0] = '\0';
     ctx->cur_num_res = 0;
 
-    /* 读取 PkgLength */
-    uint8_t lead = *p;
-    uint32_t pkg_len;
-    if ((lead & 0xC0) == 0) {
-        pkg_len = lead;
-        p++;
-    } else {
-        int n_bytes = (lead >> 6) & 0x3;
-        pkg_len = lead & 0x0F;
-        p++;
-        for (int i = 0; i < n_bytes; i++) {
-            pkg_len |= ((uint32_t)*p) << (4 + i * 8);
-            p++;
-        }
-    }
+    /* 解析 PkgLength */
+    int pkg_consumed;
+    uint32_t pkg_len = aml_parse_pkg_length(dev_body, outer_end, &pkg_consumed);
+    const uint8_t *p = dev_body + pkg_consumed;
+    const uint8_t *dev_end = dev_body + pkg_len;
+    if (dev_end > outer_end)
+        dev_end = outer_end;
 
-    const uint8_t *body_start = p;
-    const uint8_t *real_end = body_start + pkg_len - (body_start - dev_start);
-    if (real_end > dev_end)
-        real_end = dev_end;
-
-    /* 读取 Device NameString */
+    /* 读取设备 NameString */
     char dev_name[ACPI_DEV_NAME_SIZE];
     int consumed = aml_parse_namestring(p, dev_name, sizeof(dev_name));
     p += consumed;
 
-    /* 复制设备短名到上下文 */
     strncpy(ctx->cur_dev_name, dev_name, ACPI_DEV_NAME_SIZE - 1);
     ctx->cur_dev_name[ACPI_DEV_NAME_SIZE - 1] = '\0';
 
     ctx->in_device = 1;
 
-    /* 扫描 Device 内部对象 */
-    while (p < real_end) {
-        if (*p == AML_EXT_OP_PREFIX) {
-            /* 扩展 opcode */
-            uint8_t ext_op = p[1];
-            if (ext_op == AML_DEVICE_OP || ext_op == AML_PROCESSOR_OP ||
-                ext_op == AML_POWER_RES_OP || ext_op == AML_THERMAL_ZONE_OP) {
-                /* 嵌套设备，递归扫描 */
-                aml_scan_device_attrs(ctx, p + 2, real_end);
-                /* 跳回当前设备上下文 */
-            }
-            /* 跳过整个子对象：PkgLength 后继续 */
-            /* 这里简化处理，直接 break 退出 */
-            break;
-        }
+    /* 扫描 Device 内部所有子对象 */
+    while (p < dev_end) {
+        uint8_t op = *p;
 
-        if (*p == AML_SCOPE_OP) {
-            /* Scope 对象：跳过 */
-            break;
-        }
-
-        if (*p == AML_NAME_OP) {
-            /* Name 对象 */
+        if (op == AML_NAME_OP) {
             p++;
             char name_seg[8];
             consumed = aml_parse_namestring(p, name_seg, sizeof(name_seg));
             p += consumed;
 
-            /* 检查是否是 _HID, _CID, _CRS */
             if (strncmp(name_seg, "_HID", 4) == 0) {
-                /* _HID 值 */
                 if (*p == AML_STRING_PREFIX) {
                     p++;
                     strncpy(ctx->cur_hid, (const char *)p, ACPI_HID_SIZE - 1);
                     ctx->cur_hid[ACPI_HID_SIZE - 1] = '\0';
-                    while (p < real_end && *p != '\0')
-                        p++;
-                    p++; /* '\0' */
+                    while (p < dev_end && *p != '\0') p++;
+                    p++; /* skip '\0' */
                 } else if (*p == AML_DWORD_PREFIX) {
                     p++;
-                    uint32_t val = aml_read32(p);
-                    acpi_eisa_id_to_str(val, ctx->cur_hid, ACPI_HID_SIZE);
+                    acpi_eisa_id_to_str(aml_read32(p), ctx->cur_hid, ACPI_HID_SIZE);
                     p += 4;
                 } else if (*p == AML_WORD_PREFIX) {
                     p++;
-                    uint32_t val = aml_read16(p);
-                    acpi_eisa_id_to_str(val, ctx->cur_hid, ACPI_HID_SIZE);
+                    acpi_eisa_id_to_str((uint32_t)aml_read16(p), ctx->cur_hid, ACPI_HID_SIZE);
                     p += 2;
                 } else if (*p == AML_BYTE_PREFIX) {
                     p++;
-                    acpi_eisa_id_to_str(*p, ctx->cur_hid, ACPI_HID_SIZE);
+                    acpi_eisa_id_to_str((uint32_t)*p, ctx->cur_hid, ACPI_HID_SIZE);
                     p++;
                 } else {
-                    p += aml_skip_data_object(p, real_end);
+                    p += aml_skip_data_object(p, dev_end);
                 }
             } else if (strncmp(name_seg, "_CID", 4) == 0) {
-                /* _CID 值 */
                 if (*p == AML_STRING_PREFIX) {
                     p++;
                     strncpy(ctx->cur_cid, (const char *)p, ACPI_HID_SIZE - 1);
                     ctx->cur_cid[ACPI_HID_SIZE - 1] = '\0';
-                    while (p < real_end && *p != '\0')
-                        p++;
+                    while (p < dev_end && *p != '\0') p++;
                     p++;
                 } else if (*p == AML_DWORD_PREFIX) {
                     p++;
-                    uint32_t val = aml_read32(p);
-                    acpi_eisa_id_to_str(val, ctx->cur_cid, ACPI_HID_SIZE);
+                    acpi_eisa_id_to_str(aml_read32(p), ctx->cur_cid, ACPI_HID_SIZE);
                     p += 4;
                 } else {
-                    p += aml_skip_data_object(p, real_end);
+                    p += aml_skip_data_object(p, dev_end);
                 }
             } else if (strncmp(name_seg, "_CRS", 4) == 0) {
-                /* _CRS 值：通常是 Buffer */
                 if (*p == AML_BUFFER_OP) {
                     p++;
-                    /* PkgLength */
-                    lead = *p;
-                    uint32_t pkg_len2;
-                    if ((lead & 0xC0) == 0) {
-                        pkg_len2 = lead;
-                        p++;
-                    } else {
-                        int nb = (lead >> 6) & 0x3;
-                        pkg_len2 = lead & 0x0F;
-                        p++;
-                        for (int i = 0; i < nb; i++) {
-                            pkg_len2 |= ((uint32_t)*p) << (4 + i * 8);
-                            p++;
-                        }
-                    }
-                    /* BufferSize（通常是 ByteData） */
+                    int pkg_c;
+                    uint32_t pkg2 = aml_parse_pkg_length(p, dev_end, &pkg_c);
+                    p += pkg_c;
                     uint32_t buf_size = 0;
                     if (*p == AML_BYTE_PREFIX) {
-                        p++;
-                        buf_size = *p++;
+                        p++; buf_size = *p++;
                     } else if (*p == AML_WORD_PREFIX) {
-                        p++;
-                        buf_size = aml_read16(p);
-                        p += 2;
+                        p++; buf_size = aml_read16(p); p += 2;
                     } else if (*p == AML_DWORD_PREFIX) {
-                        p++;
-                        buf_size = aml_read32(p);
-                        p += 4;
+                        p++; buf_size = aml_read32(p); p += 4;
                     } else {
                         buf_size = *p++;
                     }
-                    /* 解析 CRS 资源 */
                     ctx->cur_num_res = acpi_parse_crs_buffer(p, buf_size,
                                                               ctx->cur_res,
                                                               ACPI_MAX_CRS_RESOURCES);
                     p += buf_size;
                 } else {
-                    p += aml_skip_data_object(p, real_end);
+                    p += aml_skip_data_object(p, dev_end);
                 }
             } else {
-                /* 其他 Name：跳过值 */
-                p += aml_skip_data_object(p, real_end);
+                p += aml_skip_data_object(p, dev_end);
             }
             continue;
         }
 
-        /* 未知 opcode：尝试跳过 */
+        if (op == AML_EXT_OP_PREFIX) {
+            if (p + 1 >= dev_end) break;
+            uint8_t ext_op = p[1];
+
+            if (ext_op == AML_DEVICE_OP || ext_op == AML_PROCESSOR_OP ||
+                ext_op == AML_POWER_RES_OP || ext_op == AML_THERMAL_ZONE_OP) {
+                /* 嵌套设备：保存父设备上下文，递归扫描，再恢复 */
+                char sv_name[ACPI_DEV_NAME_SIZE];
+                char sv_hid[ACPI_HID_SIZE];
+                char sv_cid[ACPI_HID_SIZE];
+                int  sv_num_res = ctx->cur_num_res;
+                struct acpi_resource_info sv_res[ACPI_MAX_CRS_RESOURCES];
+                strncpy(sv_name, ctx->cur_dev_name, ACPI_DEV_NAME_SIZE);
+                strncpy(sv_hid,  ctx->cur_hid,  ACPI_HID_SIZE);
+                strncpy(sv_cid,  ctx->cur_cid,  ACPI_HID_SIZE);
+                memcpy(sv_res, ctx->cur_res, sizeof(ctx->cur_res));
+                /* 递归扫描子设备 */
+                aml_scan_device_attrs(ctx, p + 2, dev_end);
+                /* 跳过已扫描的子设备对象 */
+                int pkg_c;
+                uint32_t plen = aml_parse_pkg_length(p + 2, dev_end, &pkg_c);
+                p = p + 2 + plen;
+                /* 恢复父设备上下文，继续扫描后续属性 */
+                strncpy(ctx->cur_dev_name, sv_name, ACPI_DEV_NAME_SIZE);
+                strncpy(ctx->cur_hid, sv_hid, ACPI_HID_SIZE);
+                strncpy(ctx->cur_cid, sv_cid, ACPI_HID_SIZE);
+                ctx->cur_num_res = sv_num_res;
+                memcpy(ctx->cur_res, sv_res, sizeof(ctx->cur_res));
+                continue;
+            } else if (ext_op == AML_MUTEX_OP || ext_op == AML_EVENT_OP) {
+                /* Mutex/Event：NameSeg + 同步标志，固定 7 字节 */
+                p += 7;
+                continue;
+            } else if (ext_op == AML_FIELD_OP ||
+                       ext_op == AML_INDEXFIELD_OP ||
+                       ext_op == AML_BANKFIELD_OP) {
+                /* Field 类：用 PkgLength 包裹，整体跳过 */
+                int pkg_c;
+                uint32_t plen = aml_parse_pkg_length(p + 2, dev_end, &pkg_c);
+                p = p + 2 + plen;
+                continue;
+            }
+            p += 2;
+            continue;
+        }
+
+        if (op == AML_SCOPE_OP) {
+            /* Scope：保存父设备上下文，然后递归进入 */
+            int pkg_c;
+            uint32_t plen = aml_parse_pkg_length(p + 1, dev_end, &pkg_c);
+            const uint8_t *scope_body = p + 1 + pkg_c;
+            const uint8_t *scope_end = p + plen;
+            if (scope_end > dev_end) scope_end = dev_end;
+            /* 保存当前设备上下文，扫描完 Scope 后恢复 */
+            char save_name[ACPI_DEV_NAME_SIZE];
+            char save_hid[ACPI_HID_SIZE];
+            char save_cid[ACPI_HID_SIZE];
+            int  save_num_res = ctx->cur_num_res;
+            int  save_in_dev  = ctx->in_device;
+            struct acpi_resource_info save_res[ACPI_MAX_CRS_RESOURCES];
+            strncpy(save_name, ctx->cur_dev_name, ACPI_DEV_NAME_SIZE);
+            strncpy(save_hid,  ctx->cur_hid,  ACPI_HID_SIZE);
+            strncpy(save_cid,  ctx->cur_cid,  ACPI_HID_SIZE);
+            memcpy(save_res, ctx->cur_res, sizeof(ctx->cur_res));
+            /* 递归扫描 Scope 内部命名空间（任意深度） */
+            aml_scan_namespace_level(ctx, scope_body, scope_end);
+            /* 恢复父设备上下文 */
+            strncpy(ctx->cur_dev_name, save_name, ACPI_DEV_NAME_SIZE);
+            strncpy(ctx->cur_hid, save_hid, ACPI_HID_SIZE);
+            strncpy(ctx->cur_cid, save_cid, ACPI_HID_SIZE);
+            ctx->cur_num_res = save_num_res;
+            ctx->in_device = save_in_dev;
+            memcpy(ctx->cur_res, save_res, sizeof(ctx->cur_res));
+            p = scope_end;
+            continue;
+        }
+
+        if (op == AML_METHOD_OP) {
+            /* Method：PkgLength + NameString + MethodFlags + TermList */
+            int pkg_c;
+            uint32_t plen = aml_parse_pkg_length(p + 1, dev_end, &pkg_c);
+            p = p + 1 + plen;  /* 跳过整个 Method */
+            continue;
+        }
+
+        /* 未知 opcode：前进 1 字节 */
         p++;
     }
 
@@ -629,6 +683,72 @@ static void aml_save_device(struct aml_scan_ctx *ctx)
 
 /* ======================== 顶层 AML 遍历 ======================== */
 
+/*
+ * 扫描一个命名空间层级（顶层或 Scope 内部）的所有对象
+ * 递归进入 Scope，发现 Device 则保存并注册
+ */
+static void aml_scan_namespace_level(struct aml_scan_ctx *ctx,
+                                      const uint8_t *start,
+                                      const uint8_t *end)
+{
+    const uint8_t *p = start;
+
+    while (p < end) {
+        uint8_t op = *p;
+
+        if (op == AML_EXT_OP_PREFIX) {
+            if (p + 1 >= end) break;
+            uint8_t ext_op = p[1];
+
+            if (ext_op == AML_DEVICE_OP || ext_op == AML_PROCESSOR_OP ||
+                ext_op == AML_POWER_RES_OP || ext_op == AML_THERMAL_ZONE_OP) {
+                /* 设备对象：扫描其属性 */
+                aml_scan_device_attrs(ctx, p + 2, end);
+                if (ctx->cur_hid[0] || ctx->cur_cid[0]) {
+                    aml_save_device(ctx);
+                    printk("ACPI DSDT: device '%s' HID='%s' CID='%s' res=%d\n",
+                           ctx->cur_dev_name, ctx->cur_hid, ctx->cur_cid,
+                           ctx->cur_num_res);
+                }
+                /* 跳过已扫描的设备对象 */
+                int pkg_c;
+                uint32_t plen = aml_parse_pkg_length(p + 2, end, &pkg_c);
+                p = p + 2 + plen;
+                continue;
+            } else if (ext_op == AML_SCOPE_OP) {
+                /* Scope：递归进入 */
+                int pkg_c;
+                uint32_t plen = aml_parse_pkg_length(p + 2, end, &pkg_c);
+                const uint8_t *scope_body = p + 2 + pkg_c;
+                const uint8_t *scope_end  = p + 2 + plen;
+                if (scope_end > end) scope_end = end;
+                /* 递归扫描 Scope 内部命名空间 */
+                aml_scan_namespace_level(ctx, scope_body, scope_end);
+                p = scope_end;
+                continue;
+            }
+            p += 2;
+            continue;
+        }
+
+        if (op == AML_SCOPE_OP) {
+            /* Primary Scope（无 ExtOpPrefix） */
+            int pkg_c;
+            uint32_t plen = aml_parse_pkg_length(p + 1, end, &pkg_c);
+            const uint8_t *scope_body = p + 1 + pkg_c;
+            const uint8_t *scope_end  = p + plen;
+            if (scope_end > end) scope_end = end;
+            /* 递归进入 Scope */
+            aml_scan_namespace_level(ctx, scope_body, scope_end);
+            p = scope_end;
+            continue;
+        }
+
+        /* 其他顶层 opcode：跳过 */
+        p++;
+    }
+}
+
 static void acpi_dsdt_scan_devices(unsigned long dsdt_phys)
 {
     struct aml_scan_ctx ctx;
@@ -655,86 +775,11 @@ static void acpi_dsdt_scan_devices(unsigned long dsdt_phys)
     ctx.depth = 0;
     ctx.in_device = 0;
 
-    printk("ACPI DSDT: scanning AML (%d bytes)...\n", dsdt_len - (int)sizeof(acpi_table_header));
+    printk("ACPI DSDT: scanning AML (%d bytes)...\n",
+           dsdt_len - (int)sizeof(acpi_table_header));
 
-    /* 遍历 AML 顶层对象 */
-    while (ctx.cur < ctx.end) {
-        uint8_t op = *ctx.cur;
-
-        if (op == AML_EXT_OP_PREFIX) {
-            uint8_t ext_op = ctx.cur[1];
-            if (ext_op == AML_DEVICE_OP) {
-                /* 顶层 Device */
-                aml_scan_device_attrs(&ctx, ctx.cur + 2, ctx.end);
-                if (ctx.cur_hid[0] || ctx.cur_cid[0]) {
-                    aml_save_device(&ctx);
-                    printk("ACPI DSDT: device '%s' HID='%s' CID='%s' res=%d\n",
-                           ctx.cur_dev_name, ctx.cur_hid, ctx.cur_cid, ctx.cur_num_res);
-                }
-                /* 跳过整个 Device 对象 */
-                /* 简化处理：直接前进 PkgLength */
-                uint8_t lead2 = ctx.cur[2];
-                uint32_t plen;
-                if ((lead2 & 0xC0) == 0) {
-                    plen = lead2;
-                    ctx.cur += 3 + plen;
-                } else {
-                    int nb2 = (lead2 >> 6) & 0x3;
-                    plen = lead2 & 0x0F;
-                    for (int i = 0; i < nb2; i++)
-                        plen |= ((uint32_t)ctx.cur[3 + i]) << (4 + i * 8);
-                    ctx.cur += 3 + nb2 + plen - 1;
-                }
-                continue;
-            } else if (ext_op == AML_SCOPE_OP) {
-                /* Scope：进入内部继续扫描 */
-                uint8_t lead2 = ctx.cur[2];
-                uint32_t plen;
-                if ((lead2 & 0xC0) == 0) {
-                    plen = lead2;
-                    ctx.cur += 3;
-                } else {
-                    int nb2 = (lead2 >> 6) & 0x3;
-                    plen = lead2 & 0x0F;
-                    for (int i = 0; i < nb2; i++)
-                        plen |= ((uint32_t)ctx.cur[3 + i]) << (4 + i * 8);
-                    ctx.cur += 3 + nb2;
-                }
-                /* 递归扫描 Scope 内容 */
-                const uint8_t *scope_end = ctx.cur + plen - 1;
-                if (scope_end > ctx.end)
-                    scope_end = ctx.end;
-                /* TODO: 递归调用扫描 Scope 内部 */
-                ctx.cur = scope_end;
-                continue;
-            }
-            /* 其他扩展 opcode：跳过 */
-            ctx.cur += 2;
-            continue;
-        }
-
-        if (op == AML_SCOPE_OP) {
-            /* Primary Scope */
-            uint8_t lead2 = ctx.cur[1];
-            uint32_t plen;
-            if ((lead2 & 0xC0) == 0) {
-                plen = lead2;
-                ctx.cur += 2;
-            } else {
-                int nb2 = (lead2 >> 6) & 0x3;
-                plen = lead2 & 0x0F;
-                for (int i = 0; i < nb2; i++)
-                    plen |= ((uint32_t)ctx.cur[2 + i]) << (4 + i * 8);
-                ctx.cur += 2 + nb2;
-            }
-            /* 跳过 Scope 内容（简化） */
-            ctx.cur += plen - 1;
-            continue;
-        }
-
-        /* 其他顶层 opcode：跳过 */
-        ctx.cur++;
-    }
+    /* 递归遍历整个 AML 命名空间 */
+    aml_scan_namespace_level(&ctx, ctx.base, ctx.end);
 
     printk("ACPI DSDT: found %d devices\n", acpi_context.dsdt_device_count);
 }
