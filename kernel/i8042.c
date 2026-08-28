@@ -226,26 +226,28 @@ no_mouse:
  * 这样即使 ACPI AML 解析器尚未完整支持 Scope 递归，键盘/鼠标仍能工作。
  */
 
-/* 键盘回退设备 */
+/* 键盘回退设备（IRQ1，ACPI 未发现时使用） */
 static struct platform_resource kbd_fallback_res[] = {
     { .start = I8042_DATA_PORT, .end = I8042_STATUS_PORT, .flags = IORESOURCE_IO },
+    { .start = 1, .end = 1, .flags = IORESOURCE_IRQ },   /* ISA IRQ1 */
 };
 static struct platform_device kbd_fallback_dev = {
     .dev.name = "PNP0303",
     .id = -1,
     .resource = kbd_fallback_res,
-    .num_resources = 1,
+    .num_resources = 2,
 };
 
-/* 鼠标回退设备 */
+/* 鼠标回退设备（IRQ12，ACPI 未发现时使用） */
 static struct platform_resource mouse_fallback_res[] = {
     { .start = I8042_DATA_PORT, .end = I8042_STATUS_PORT, .flags = IORESOURCE_IO },
+    { .start = 12, .end = 12, .flags = IORESOURCE_IRQ }, /* ISA IRQ12 */
 };
 static struct platform_device mouse_fallback_dev = {
     .dev.name = "PNP0F13",
     .id = -1,
     .resource = mouse_fallback_res,
-    .num_resources = 1,
+    .num_resources = 2,
 };
 
 static void i8042_register_child_devices(void)

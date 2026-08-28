@@ -27,8 +27,9 @@
 #define PS2_DATA_PORT    0x60   /* 数据端口（键盘/鼠标共用） */
 #define PS2_STATUS_PORT  0x64   /* 状态寄存器端口 */
 
-/* 鼠标中断向量：ISA IRQ12 → GSI 12 → FIRST_DEVICE_VECTOR+12 */
-#define MOUSE_VECTOR     (FIRST_DEVICE_VECTOR + 12)   /* 0x3D */
+/* 鼠标中断向量由 ACPI _CRS 资源中的 IRQ 号动态计算：
+ * vector = FIRST_DEVICE_VECTOR + IRQ  (IRQ12 → 0x3D)
+ */
 
 /* 数据包解析状态机 */
 static unsigned char mouse_cycle = 0;    /* 当前字节序号 0/1/2 */
@@ -121,17 +122,30 @@ static void mouse_handler(int irq, void *dev_id, struct pt_regs *regs)
 /*
  * mouse_probe - 鼠标 Platform 驱动 probe
  *
- * 匹配成功后注册鼠标中断处理函数。
- * 此时 i8042 控制器已完成初始化，鼠标端口可用。
+ * 匹配成功后从设备资源中获取 IRQ 号，计算中断向量并注册处理函数。
+ * IRQ 由 ACPI DSDT 扫描得到（PS/2 鼠标固定为 IRQ12），
+ * 向量映射：vector = FIRST_DEVICE_VECTOR + IRQ。
  */
 static int mouse_probe(struct platform_device *pdev)
 {
-    int ret = request_irq(MOUSE_VECTOR, mouse_handler, "mouse", NULL);
+    struct platform_resource *irq_res;
+    int irq, vector, ret;
+
+    irq_res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
+    if (!irq_res) {
+        printk("mouse: no IRQ resource found\n");
+        return -1;
+    }
+
+    irq    = (int)irq_res->start;
+    vector = FIRST_DEVICE_VECTOR + irq;
+
+    ret = request_irq(vector, mouse_handler, "mouse", NULL);
     if (ret == 0)
-        printk("mouse: IRQ12 registered (vector=%#x)\n", MOUSE_VECTOR);
+        printk("mouse: IRQ%d registered (vector=%#x)\n", irq, vector);
     else
-        printk("mouse: failed to register IRQ12 (vector=%#x)\n",
-               MOUSE_VECTOR);
+        printk("mouse: failed to register IRQ%d (vector=%#x)\n",
+               irq, vector);
     return ret;
 }
 

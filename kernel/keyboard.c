@@ -25,8 +25,9 @@
 #define KBD_DATA_PORT    0x60   /* 扫描码数据端口 */
 #define KBD_STATUS_PORT  0x64   /* 状态寄存器端口 */
 
-/* 键盘中断向量：ISA IRQ1 → GSI 1 → FIRST_DEVICE_VECTOR+1 */
-#define KEYBOARD_VECTOR  (FIRST_DEVICE_VECTOR + 1)
+/* 键盘中断向量由 ACPI _CRS 资源中的 IRQ 号动态计算：
+ * vector = FIRST_DEVICE_VECTOR + IRQ  (IRQ1 → 0x32)
+ */
 
 /* ========== Set 1 扫描码 → ASCII 映射表 ==========
  *
@@ -189,18 +190,30 @@ static void keyboard_handler(int irq, void *dev_id, struct pt_regs *regs)
 /*
  * keyboard_probe - 键盘 Platform 驱动 probe
  *
- * 匹配成功后注册键盘中断处理函数。
- * 此时 i8042 控制器已完成初始化，键盘端口可用。
+ * 匹配成功后从设备资源中获取 IRQ 号，计算中断向量并注册处理函数。
+ * IRQ 由 ACPI DSDT 扫描得到（PS/2 键盘固定为 IRQ1），
+ * 向量映射：vector = FIRST_DEVICE_VECTOR + IRQ。
  */
 static int keyboard_probe(struct platform_device *pdev)
 {
-    int ret = request_irq(KEYBOARD_VECTOR, keyboard_handler,
-                          "keyboard", NULL);
+    struct platform_resource *irq_res;
+    int irq, vector, ret;
+
+    irq_res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
+    if (!irq_res) {
+        printk("keyboard: no IRQ resource found\n");
+        return -1;
+    }
+
+    irq    = (int)irq_res->start;
+    vector = FIRST_DEVICE_VECTOR + irq;
+
+    ret = request_irq(vector, keyboard_handler, "keyboard", NULL);
     if (ret == 0)
-        printk("keyboard: IRQ1 registered (vector=%#x)\n", KEYBOARD_VECTOR);
+        printk("keyboard: IRQ%d registered (vector=%#x)\n", irq, vector);
     else
-        printk("keyboard: failed to register IRQ1 (vector=%#x)\n",
-               KEYBOARD_VECTOR);
+        printk("keyboard: failed to register IRQ%d (vector=%#x)\n",
+               irq, vector);
     return ret;
 }
 
