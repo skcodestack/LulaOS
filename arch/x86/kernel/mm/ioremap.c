@@ -29,6 +29,7 @@
 #include <mm/slab.h>
 #include <printk.h>
 #include <libs/memcpy.h>
+#include <stddef.h>
 
 /* ======================== 常量 ======================== */
 
