@@ -16,6 +16,7 @@
 #include <drm/drm_gem.h>
 #include <drm/drm_kms.h>
 #include <drm/drm_ioctl.h>
+#include <mm/slab.h>
 #include <printk.h>
 #include <libs/memcpy.h>
 
