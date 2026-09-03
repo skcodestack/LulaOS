@@ -398,6 +398,53 @@ static int bochs_drm_load(struct drm_device *dev)
     bochs->encoder.crtc = &bochs->crtc;
     bochs->encoder.connector = &bochs->connector;
 
+    /* 打印当前显卡支持的分辨率列表 */
+    printk("[bochs-drm] Supported resolutions (%d modes):\n", (int)BOCHS_MODE_COUNT);
+    for (int i = 0; i < (int)BOCHS_MODE_COUNT; i++) {
+        uint32_t pitch_bytes = bochs_modes[i].width * 4; /* 32bpp = 4 bytes/pixel */
+        uint32_t vram_required = pitch_bytes * bochs_modes[i].height;
+        printk("[bochs-drm]   [%d] %4dx%-4d @ %dHz  pitch=%u bytes  vram_needed=%u KB%s\n",
+               i, bochs_modes[i].width, bochs_modes[i].height,
+               bochs_modes[i].refresh, pitch_bytes,
+               vram_required / 1024,
+               vram_required > bochs->vram_size ? " [EXCEEDS VRAM!]" : "");
+    }
+
+    /* 打印 DRM 设备配置信息汇总 */
+    printk("[bochs-drm] ========== DRM Device Configuration ==========\n");
+    printk("[bochs-drm] Driver       : %s (%s)\n",
+           dev->driver->name, dev->driver->desc);
+    printk("[bochs-drm] Device type  : %s\n",
+           bochs->pci_dev ? "QEMU std-vga (PCI 0x1234:0x1111)"
+                          : "Bochs VBE (ISA, fixed 0xE0000000)");
+    if (bochs->pci_dev) {
+        printk("[bochs-drm] PCI bus      : %02x:%02x.%x\n",
+               bochs->pci_dev->bus,
+               bochs->pci_dev->devfn >> 3,
+               bochs->pci_dev->devfn & 0x07);
+    }
+    printk("[bochs-drm] VRAM phys    : 0x%lx\n", bochs->vram_phys);
+    printk("[bochs-drm] VRAM virt    : 0x%lx\n", (unsigned long)bochs->vram_virt);
+    printk("[bochs-drm] VRAM size    : %lu MB (%lu bytes)\n",
+           bochs->vram_size / (1024 * 1024), bochs->vram_size);
+    printk("[bochs-drm] Mode         : %dx%d @ %dbpp, pitch=%d bytes\n",
+           bochs->current_width, bochs->current_height,
+           bochs->current_bpp, bochs->current_pitch);
+    printk("[bochs-drm] Virt size    : %dx%d (double buffering)\n",
+           bochs->current_width, bochs->virt_height);
+    printk("[bochs-drm] Connector    : type=VIRTUAL, status=CONNECTED\n");
+    printk("[bochs-drm] Modes count  : %d supported\n", (int)BOCHS_MODE_COUNT);
+    printk("[bochs-drm] Supported modes:\n");
+    for (int i = 0; i < (int)BOCHS_MODE_COUNT; i++) {
+        printk("[bochs-drm]   [%d] %dx%d @ %dHz\n",
+               i, bochs_modes[i].width, bochs_modes[i].height,
+               bochs_modes[i].refresh);
+    }
+    printk("[bochs-drm] GEM handles  : next=%u\n", dev->next_handle);
+    printk("[bochs-drm] Registered   : %s\n",
+           dev->registered ? "yes" : "no");
+    printk("[bochs-drm] ==============================================\n");
+
     printk("[bochs-drm] Driver loaded successfully\n");
     return 0;
 }
