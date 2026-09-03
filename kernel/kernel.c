@@ -21,6 +21,8 @@
 #include <usb/usb.h>
 #include <usb/uhci.h>
 #include <drm/drm_core.h>
+#include <video/fb.h>
+#include <tty/tty.h>
  
 void _kernel_init()
 {
@@ -84,6 +86,22 @@ asmlinkage void _kernel_main()
     mm_init();
 
     kmem_cache_init(); 
+
+    /*
+     * 初始化 framebuffer 控制台（需要伙伴系统 + slab 就绪，
+     * 因为 fb_ioremap 使用 __alloc_pages 分配 PTE 页表页）
+     */
+    fbcon_init();
+    if (fb.active) {
+        tty_set_mode(TTY_MODE_FB);
+    }
+
+    /*
+     * 初始化 vmalloc 起始地址：从 fb_ioremap 映射结束位置
+     * 按 4MB 对齐开始，避免与 framebuffer 虚拟地址冲突。
+     * 必须在 fbcon_init() 之后调用。
+     */
+    vmalloc_area_init();
 
     /* 注册 Platform 总线（键盘/鼠标等设备挂在此总线上） */
     platform_bus_init();

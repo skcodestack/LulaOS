@@ -94,8 +94,12 @@ void  iounmap(void *addr);
  *  分配出的内存未清零，调用方需自行初始化。
  *
  *  vfree: 释放 vmalloc 分配的内存（读 PTE 获取 PFN 并归还伙伴系统）
+ *
+ *  vmalloc_area_init: 在 fbcon_init() 完成后调用，将 vmalloc 起始地址
+ *                     设为 fb_ioremap 映射结束后的 4MB 对齐位置
  */
 void *vmalloc(unsigned long size);
 void  vfree(void *addr);
+void  vmalloc_area_init(void);
 
 #endif

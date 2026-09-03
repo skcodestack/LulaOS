@@ -51,6 +51,6 @@ static inline void __flush_tlb_all(void)
 }
 
 /* Framebuffer 映射起始虚拟地址（vmalloc 区域内） */
-#define FB_IOREMAP_BASE  0xF0000000UL
+#define FB_IOREMAP_BASE  0xF8000000UL
 
 #endif

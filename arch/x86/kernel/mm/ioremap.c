@@ -8,10 +8,15 @@
  *   vmalloc  : 分配物理不连续但虚拟连续的内存块（普通内核内存）。
  *
  * 虚拟地址空间布局：
- *   0xC0000000 ~ 0xF7FFFFFF : 直接映射区（0~896MB，已建立）
- *   0xF8000000 ~ 0xFDFFFFFF : ioremap/vmalloc 共享区（本文件使用，96MB）
- *   0xFE000000 ~ 0xFE3FFFFF : PKMAP 永久映射区
- *   0xFFC00000 ~ 0xFFFFE000 : Fixmap 固定映射区
+ *   0xC0000000 ~ high_memory        : 直接映射区（0~896MB，已建立）
+ *   FB_IOREMAP_BASE ~ fb_ioremap_end : fb_ioremap 专用映射区（fbcon_init 使用）
+ *   fb_ioremap_end(4MB对齐) ~ 0xFE000000 : ioremap/vmalloc 共享区（本文件使用）
+ *   0xFE000000 ~ 0xFE3FFFFF         : PKMAP 永久映射区
+ *   0xFFC00000 ~ 0xFFFFE000         : Fixmap 固定映射区
+ *
+ * vmalloc 起始地址由 vmalloc_area_init() 在 fbcon_init() 完成后
+ * 动态设定，从 fb_ioremap 映射结束位置按 4MB（PGDIR）对齐开始，
+ * 避免与 framebuffer 映射地址冲突。
  *
  * 两级页表（PGD → PTE）：
  *   - 若目标 PGD 条目为空，分配一页作为 PTE 表并安装
@@ -33,8 +38,10 @@
 
 /* ======================== 常量 ======================== */
 
-#define VMALLOC_START   0xF8000000UL   /* 直接映射区之后 */
 #define VMALLOC_END     0xFE000000UL   /* PKMAP 之前 */
+
+/* fb.c 导出的 fb_ioremap 分配游标（映射结束后的下一个虚拟地址） */
+extern unsigned long ioremap_next_vaddr;
 
 /* vm_struct.flags 取值 */
 #define VM_IOREMAP  0x00000001   /* ioremap 映射（不释放物理页） */
@@ -60,9 +67,9 @@ struct vm_struct {
     struct vm_struct *next;
 };
 
-/* vmalloc 区域链表头及分配游标 */
+/* vmalloc 区域链表头及分配游标（由 vmalloc_area_init 动态初始化） */
 static struct vm_struct *vmlist = NULL;
-static unsigned long vmalloc_next = VMALLOC_START;
+static unsigned long vmalloc_next = 0;
 
 /* ======================== TLB 刷新 ======================== */
 
@@ -73,6 +80,29 @@ static inline void __flush_tlb_one(unsigned long addr)
 }
 
 /* ======================== 虚拟地址区域分配 ======================== */
+
+/*
+ * vmalloc_area_init - 初始化 vmalloc 起始地址
+ *
+ * 在 fbcon_init() 完成后调用。读取 fb.c 中 fb_ioremap 的分配游标
+ * ioremap_next_vaddr（即 framebuffer 映射结束后的下一个虚拟地址），
+ * 按 4MB（PGDIR_SIZE）向上对齐，作为 vmalloc/ioremap 的起始地址。
+ *
+ * 若 fb 未激活（ioremap_next_vaddr 仍为 FB_IOREMAP_BASE），
+ * vmalloc 直接从 FB_IOREMAP_BASE 开始，与旧逻辑兼容。
+ *
+ * 调用时机：setup_arch() 中，fbcon_init() 之后、slab 初始化之前。
+ */
+void vmalloc_area_init(void)
+{
+    unsigned long fb_end = ioremap_next_vaddr;
+
+    /* 按 4MB（PGDIR_SIZE）向上对齐 */
+    vmalloc_next = (fb_end + PGDIR_SIZE - 1) & PGDIR_MASK;
+
+    printk("vmalloc: start=0x%lx (fb_ioremap end=0x%lx, aligned to 4MB)\n",
+           vmalloc_next, fb_end);
+}
 
 /*
  * get_vm_area - 在 vmalloc 区分配连续虚拟地址段
@@ -86,6 +116,12 @@ static struct vm_struct *get_vm_area(unsigned long size)
 {
     unsigned long total, start;
     struct vm_struct *area;
+
+    /* 安全检查：vmalloc_area_init() 必须已被调用 */
+    if (!vmalloc_next) {
+        printk("get_vm_area: vmalloc area not initialized (call vmalloc_area_init first)\n");
+        return NULL;
+    }
 
     /* 加一页 guard page */
     total = PAGE_ALIGN(size) + PAGE_SIZE;

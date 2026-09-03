@@ -10,6 +10,7 @@
 #include <arch/x86/pgtable.h>
 #include <arch/x86/highmem.h>
 #include <mm/bootmem.h>
+#include <mm/mm.h>
 #include <printk.h>
 #include <libs/memcpy.h>
 #include <stdint.h>
@@ -35,7 +36,8 @@ static uint32_t fb_rows;   /* 屏幕行数（字符） */
 
 /* ========== ioremap 实现 ========== */
 
-static unsigned long ioremap_next_vaddr = FB_IOREMAP_BASE;
+/* fb_ioremap 分配游标，供 ioremap.c vmalloc_area_init() 读取 */
+unsigned long ioremap_next_vaddr = FB_IOREMAP_BASE;
 
 void *fb_ioremap(unsigned long phys_addr, unsigned long size)
 {
@@ -49,8 +51,14 @@ void *fb_ioremap(unsigned long phys_addr, unsigned long size)
 
         /* 若 PDE 不存在，分配一个新页表页 */
         if (pgd_none(*pgd)) {
-            /* __alloc_bootmem 返回虚拟地址（已加 PAGE_OFFSET） */
-            unsigned long pte_page_va = (unsigned long)__alloc_bootmem(PAGE_SIZE, PAGE_SIZE, 0);
+            /* 从伙伴系统分配一页作为 PTE 表 */
+            struct page *ptepage = __alloc_pages(0, 0);
+            if (!ptepage) {
+                printk("[fb_ioremap] out of memory allocating PTE for vaddr=0x%lx\n", vaddr);
+                return NULL;
+            }
+            unsigned long pfn       = (unsigned long)(ptepage - mem_map);
+            unsigned long pte_page_va = (unsigned long)__va(pfn << PAGE_SHIFT);
             memset((void *)pte_page_va, 0, PAGE_SIZE);
             /* PGD 存储物理地址 */
             set_pgd(pgd, __pgd(__pa(pte_page_va) | _KERNPG_TABLE));
