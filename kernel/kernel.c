@@ -21,6 +21,8 @@
 #include <usb/usb.h>
 #include <usb/uhci.h>
 #include <drm/drm_core.h>
+#include <video/fb.h>
+#include <tty/tty.h>
  
 void _kernel_init()
 {
@@ -84,6 +86,12 @@ asmlinkage void _kernel_main()
     mm_init();
 
     kmem_cache_init(); 
+
+    /* framebuffer 控制台初始化（须 slab 就绪后，ioremap 依赖 kmalloc） */
+    fbcon_init();
+    if (fb.active) {
+        tty_set_mode(TTY_MODE_FB);
+    }
 
     /* 注册 Platform 总线（键盘/鼠标等设备挂在此总线上） */
     platform_bus_init();

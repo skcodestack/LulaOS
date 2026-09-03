@@ -2,13 +2,17 @@
  * Framebuffer 控制台驱动
  *
  * 通过 GRUB Multiboot VBE 获取 LFB 地址，
- * 用 ioremap 映射到 vmalloc 区域，实现像素级文字渲染。
+ * 用 ioremap（arch/x86/kernel/mm/ioremap.c）映射到内核虚拟地址，
+ * 实现像素级文字渲染。
+ *
+ * 注意：fbcon_init 须在 kmem_cache_init（slab）之后调用，
+ *       因为 ioremap 内部依赖 kmalloc / __alloc_pages。
  */
 #include <video/fb.h>
 #include <arch/x86/boot/multiboot.h>
 #include <arch/x86/page.h>
 #include <arch/x86/pgtable.h>
-#include <arch/x86/highmem.h>
+#include <arch/x86/highmem.h>   /* ioremap */
 #include <mm/bootmem.h>
 #include <printk.h>
 #include <libs/memcpy.h>
@@ -32,44 +36,6 @@ static uint32_t fb_rows;   /* 屏幕行数（字符） */
 /* 前景色/背景色 (0x00RRGGBB) */
 #define FG_COLOR  0x00CCCCCC   /* 浅灰白 */
 #define BG_COLOR  0x00000000   /* 黑色 */
-
-/* ========== ioremap 实现 ========== */
-
-static unsigned long ioremap_next_vaddr = FB_IOREMAP_BASE;
-
-void *fb_ioremap(unsigned long phys_addr, unsigned long size)
-{
-    unsigned long vaddr_start = ioremap_next_vaddr;
-    unsigned long vaddr = vaddr_start;
-    unsigned long phys = phys_addr & PAGE_MASK;
-    unsigned long end = phys_addr + size;
-
-    while (phys < end) {
-        pgd_t *pgd = swapper_pg_dir + pgd_index(vaddr);
-
-        /* 若 PDE 不存在，分配一个新页表页 */
-        if (pgd_none(*pgd)) {
-            /* __alloc_bootmem 返回虚拟地址（已加 PAGE_OFFSET） */
-            unsigned long pte_page_va = (unsigned long)__alloc_bootmem(PAGE_SIZE, PAGE_SIZE, 0);
-            memset((void *)pte_page_va, 0, PAGE_SIZE);
-            /* PGD 存储物理地址 */
-            set_pgd(pgd, __pgd(__pa(pte_page_va) | _KERNPG_TABLE));
-        }
-
-        /* 设置 PTE（PTE 存储物理地址） */
-        pte_t *pte = pte_offset(pgd, vaddr);
-        set_pte(pte, __pte(phys | pgprot_val(PAGE_KERNEL_NOCACHE)));
-
-        phys += PAGE_SIZE;
-        vaddr += PAGE_SIZE;
-    }
-
-    ioremap_next_vaddr = vaddr;
-    __flush_tlb_all();
-
-    /* 返回包含页内偏移的虚拟地址 */
-    return (void *)(vaddr_start + (phys_addr & ~PAGE_MASK));
-}
 
 /* ========== 像素操作 ========== */
 
@@ -199,6 +165,55 @@ void fbcon_put_string(const char *str)
     }
 }
 
+/* ========== 分辨率同步接口 ========== */
+
+/*
+ * fbcon_update_mode - BGA 分辨率改变后同步 framebuffer 参数
+ *
+ * BGA 寄存器修改了硬件分辨率，但 fb_info 仍保存 GRUB 初始化时的旧值，
+ * 导致 fbcon_put_char 按旧 pitch 计算像素偏移 → 花屏。
+ *
+ * 同时，GRUB 的 ioremap 只覆盖了旧分辨率大小的显存（如 1024x768=3MB），
+ * 新分辨率（如 1920x1080=8MB）会访问未映射的虚拟地址 → Page Fault。
+ *
+ * 此函数接收 DRM 驱动已完整映射 16MB 的 virt_addr（bochs->vram_virt），
+ * 替换 fb.virt_addr，确保新分辨率下所有像素都在映射范围内。
+ *
+ * @width/height/pitch/bpp: 新分辨率参数
+ * @new_virt: DRM 驱动的 ioremap 虚拟地址（覆盖完整 VRAM），
+ *            传 0 则保持原 fb.virt_addr 不变（仅在确认映射足够时使用）
+ */
+void fbcon_update_mode(uint32_t width, uint32_t height, uint32_t pitch, uint32_t bpp,
+                       unsigned long new_virt)
+{
+    if (!fb.active)
+        return;
+
+    /* 切换到 DRM 驱动的完整 VRAM 映射（16MB，覆盖任意分辨率） */
+    if (new_virt != 0)
+        fb.virt_addr = new_virt;
+
+    /* 同步尺寸参数 */
+    fb.width  = width;
+    fb.height = height;
+    fb.pitch  = pitch;
+    fb.bpp    = (uint8_t)bpp;
+
+    /* 重新计算字符网格 */
+    fb_cols = width  / 8;
+    fb_rows = height / 16;
+
+    /* 光标复位（旧位置在新分辨率下可能越界） */
+    fb_col = 0;
+    fb_row = 0;
+
+    /* 清屏：旧帧内容在新 pitch 下是乱码 */
+    fbcon_clear();
+
+    printk("[fbcon] Mode updated: %dx%d, pitch=%d, bpp=%d, virt=0x%lx, console=%dx%d chars\n",
+           width, height, pitch, bpp, fb.virt_addr, fb_cols, fb_rows);
+}
+
 /* ========== 初始化 ========== */
 
 void fbcon_init(void)
@@ -246,9 +261,9 @@ void fbcon_init(void)
     printk("[fbcon] FB: phys=0x%lx, %dx%d, pitch=%d, bpp=%d\n",
            fb.phys_addr, fb.width, fb.height, fb.pitch, fb.bpp);
 
-    /* ioremap 映射 framebuffer 显存 */
+    /* 使用 ioremap（须 slab 就绪后）映射 framebuffer 显存 */
     unsigned long fb_size = (unsigned long)fb.pitch * fb.height;
-    void *vaddr = fb_ioremap(fb.phys_addr, fb_size);
+    void *vaddr = ioremap(fb.phys_addr, fb_size);
     if (!vaddr) {
         printk("[fbcon] ioremap failed, stay VGA text\n");
         fb.active = 0;

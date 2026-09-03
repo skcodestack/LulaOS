@@ -79,7 +79,7 @@ struct drm_gem_object *drm_gem_find(struct drm_device *dev, uint32_t handle);
 /*
  * drm_gem_mmap - 将 GEM 对象映射到用户虚拟地址
  *
- * 调用 fb_ioremap() 将物理页映射到指定的用户虚拟地址，
+  * 调用 ioremap() 将物理页映射到内核虚拟地址，
  * 使 CPU 可以直接读写显存内容。
  *
  * @obj: GEM 对象

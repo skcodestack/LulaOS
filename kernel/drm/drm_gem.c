@@ -20,7 +20,7 @@
 #include <arch/x86/pgtable.h>
 #include <printk.h>
 #include <libs/memcpy.h>
-#include <video/fb.h>     /* 使用 fb_ioremap */
+#include <arch/x86/highmem.h>   /* ioremap */
 
 /* ======================== 内部辅助 ======================== */
 
@@ -228,11 +228,10 @@ int drm_gem_mmap(struct drm_gem_object *obj, unsigned long user_vaddr)
         return DRM_ERR_INVAL;
 
     /*
-     * 调用 fb_ioremap 将物理页映射到指定的虚拟地址
-     * 注意：fb_ioremap 会占用 FB_IOREMAP_BASE 之后的地址空间，
-     * 这里直接使用它进行映射（简化实现）。
+     * 调用 ioremap 将物理页映射到内核虚拟地址
+     * ioremap 使用统一的 vmalloc 区（0xF8000000），映射大小由 vmlist 管理。
      */
-    mapped = fb_ioremap(obj->phys_addr, obj->size);
+    mapped = ioremap(obj->phys_addr, obj->size);
     if (!mapped)
         return DRM_ERR_NOMEM;
 

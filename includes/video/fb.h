@@ -31,20 +31,11 @@ void fbcon_put_string(const char *str);
 void fbcon_clear(void);
 void fbcon_scroll_up(void);
 
-/* ioremap: 将物理地址映射到 vmalloc 区域的虚拟地址 */
-void *fb_ioremap(unsigned long phys_addr, unsigned long size);
+/* BGA 分辨率改变后同步 fb 参数（由 DRM 驱动调用）
+ * new_virt: DRM 完整映射的虚拟地址（覆盖全部 VRAM），传 0 则不切换 */
+void fbcon_update_mode(uint32_t width, uint32_t height, uint32_t pitch, uint32_t bpp,
+                       unsigned long new_virt);
 
-/* TLB 刷新 */
-static inline void __flush_tlb_all(void)
-{
-    __asm__ __volatile__(
-        "movl %%cr3, %%eax\n\t"
-        "movl %%eax, %%cr3\n\t"
-        ::: "eax", "memory"
-    );
-}
-
-/* Framebuffer 映射起始虚拟地址（vmalloc 区域内） */
-#define FB_IOREMAP_BASE  0xF0000000UL
+/* ioremap（统一使用 arch/x86/kernel/mm/ioremap.c，见 arch/x86/highmem.h） */
 
 #endif
