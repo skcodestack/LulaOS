@@ -199,6 +199,55 @@ void fbcon_put_string(const char *str)
     }
 }
 
+/* ========== 分辨率同步接口 ========== */
+
+/*
+ * fbcon_update_mode - BGA 分辨率改变后同步 framebuffer 参数
+ *
+ * BGA 寄存器修改了硬件分辨率，但 fb_info 仍保存 GRUB 初始化时的旧值，
+ * 导致 fbcon_put_char 按旧 pitch 计算像素偏移 → 花屏。
+ *
+ * 同时，GRUB 的 ioremap 只覆盖了旧分辨率大小的显存（如 1024x768=3MB），
+ * 新分辨率（如 1920x1080=8MB）会访问未映射的虚拟地址 → Page Fault。
+ *
+ * 此函数接收 DRM 驱动已完整映射 16MB 的 virt_addr（bochs->vram_virt），
+ * 替换 fb.virt_addr，确保新分辨率下所有像素都在映射范围内。
+ *
+ * @width/height/pitch/bpp: 新分辨率参数
+ * @new_virt: DRM 驱动的 ioremap 虚拟地址（覆盖完整 VRAM），
+ *            传 0 则保持原 fb.virt_addr 不变（仅在确认映射足够时使用）
+ */
+void fbcon_update_mode(uint32_t width, uint32_t height, uint32_t pitch, uint32_t bpp,
+                       unsigned long new_virt)
+{
+    if (!fb.active)
+        return;
+
+    /* 切换到 DRM 驱动的完整 VRAM 映射（16MB，覆盖任意分辨率） */
+    if (new_virt != 0)
+        fb.virt_addr = new_virt;
+
+    /* 同步尺寸参数 */
+    fb.width  = width;
+    fb.height = height;
+    fb.pitch  = pitch;
+    fb.bpp    = (uint8_t)bpp;
+
+    /* 重新计算字符网格 */
+    fb_cols = width  / 8;
+    fb_rows = height / 16;
+
+    /* 光标复位（旧位置在新分辨率下可能越界） */
+    fb_col = 0;
+    fb_row = 0;
+
+    /* 清屏：旧帧内容在新 pitch 下是乱码 */
+    fbcon_clear();
+
+    printk("[fbcon] Mode updated: %dx%d, pitch=%d, bpp=%d, virt=0x%lx, console=%dx%d chars\n",
+           width, height, pitch, bpp, fb.virt_addr, fb_cols, fb_rows);
+}
+
 /* ========== 初始化 ========== */
 
 void fbcon_init(void)

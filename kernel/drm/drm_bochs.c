@@ -21,8 +21,9 @@
 #include <pci/pci.h>
 #include <arch/x86/io.h>
 #include <arch/x86/page.h>
+#include <arch/x86/highmem.h>   /* ioremap */
 #include <mm/slab.h>
-#include <video/fb.h>     /* fb_ioremap */
+#include <video/fb.h>     /* fbcon_update_mode */
 #include <printk.h>
 #include <libs/memcpy.h>
 
@@ -46,26 +47,40 @@
 #define BGA_ENABLED         0x01
 #define BGA_LINEAR_FB       0x40        /* 线性帧缓冲 */
 
-/* ======================== 预设分辨率 ======================== */
+/* ======================== 驱动私有数据 ======================== */
 
+/* 显示模式描述符 */
 struct bochs_mode {
     uint32_t width;
     uint32_t height;
     uint32_t refresh;
 };
 
-static const struct bochs_mode bochs_modes[] = {
-    { 640,  480,  60 },
-    { 800,  600,  60 },
-    { 1024, 768,  60 },
+/* 标准 VESA 分辨率探测表（按分辨率升序，用于动态筛选） */
+static const struct bochs_mode vesa_probe_modes[] = {
+    {  640,  480, 60 },
+    {  800,  600, 60 },
+    { 1024,  768, 60 },
+    { 1152,  864, 60 },
+    { 1280,  720, 60 },   /* 720p  */
+    { 1280,  960, 60 },
     { 1280, 1024, 60 },
+    { 1366,  768, 60 },
+    { 1440,  900, 60 },
+    { 1600,  900, 60 },
     { 1600, 1200, 60 },
-    { 1920, 1080, 60 },
+    { 1680, 1050, 60 },
+    { 1920, 1080, 60 },   /* 1080p */
+    { 1920, 1200, 60 },
+    { 2048, 1536, 60 },   /* QEMU std-vga 上限 */
+    { 2560, 1440, 60 },   /* 2K - 需 16MB+ VRAM */
+    { 2560, 1600, 60 },
+    { 3840, 2160, 60 },   /* 4K - 需 33MB+ VRAM  */
 };
+#define VESA_PROBE_MODE_COUNT  (sizeof(vesa_probe_modes) / sizeof(vesa_probe_modes[0]))
 
-#define BOCHS_MODE_COUNT    (sizeof(bochs_modes) / sizeof(bochs_modes[0]))
-
-/* ======================== 驱动私有数据 ======================== */
+/* 运行时最多支持的模式数量 */
+#define BOCHS_MAX_MODES  16
 
 struct bochs_device {
     struct drm_device *drm;             /* DRM 设备 */
@@ -91,6 +106,10 @@ struct bochs_device {
     /* 双缓冲支持 */
     uint32_t virt_height;               /* 虚拟高度（2x 实际高度） */
     uint32_t current_yoffset;           /* 当前显示的 Y 偏移 */
+
+    /* 运行时支持的模式列表（动态探测填充） */
+    struct bochs_mode supported_modes[BOCHS_MAX_MODES];
+    uint32_t num_supported_modes;
 };
 
 /* ======================== BGA 寄存器操作 ======================== */
@@ -105,6 +124,44 @@ static uint16_t bochs_read_reg(uint16_t index)
 {
     outw(index, BGA_IO_INDEX);
     return inw(BGA_IO_DATA);
+}
+
+/*
+ * bochs_probe_modes - 根据 VRAM 大小动态探测支持的分辨率
+ *
+ * 原理：
+ *   32bpp 下每帧所需显存 = width * height * 4
+ *   双缓冲还需要额外一倍空间（虚拟高度 = 高度 * 2），
+ *   因此约束为: width * height * 4 * 2 <= vram_size
+ *
+ * 从 vesa_probe_modes 表中筛选出 VRAM 可承载的模式，
+ * 存入 bochs->supported_modes[]，供 connector 和日志使用。
+ */
+static void bochs_probe_modes(struct bochs_device *bochs)
+{
+    uint32_t i;
+    bochs->num_supported_modes = 0;
+
+    for (i = 0; i < VESA_PROBE_MODE_COUNT && bochs->num_supported_modes < BOCHS_MAX_MODES; i++) {
+        /* 双缓冲：需要 2 帧的显存 */
+        unsigned long frame_bytes = (unsigned long)vesa_probe_modes[i].width *
+                                    vesa_probe_modes[i].height * 4;
+        unsigned long required = frame_bytes * 2;   /* 前缓冲 + 后缓冲 */
+
+        if (required <= bochs->vram_size) {
+            bochs->supported_modes[bochs->num_supported_modes] = vesa_probe_modes[i];
+            bochs->num_supported_modes++;
+        }
+    }
+
+    /* 保底：若一个都没有，强制加入 640x480（需 2.4MB，16MB VRAM 必然满足） */
+    if (bochs->num_supported_modes == 0) {
+        bochs->supported_modes[0].width  = 640;
+        bochs->supported_modes[0].height = 480;
+        bochs->supported_modes[0].refresh = 60;
+        bochs->num_supported_modes = 1;
+        printk("[bochs-drm] WARNING: No modes fit VRAM, fallback to 640x480\n");
+    }
 }
 
 /*
@@ -145,6 +202,11 @@ static void bochs_set_resolution(struct bochs_device *bochs,
     bochs->current_pitch  = width * (bpp / 8);
     bochs->virt_height    = height * 2;
     bochs->current_yoffset = 0;
+
+    /* 先同步 framebuffer 控制台参数，再打印日志（否则 pitch 不一致导致花屏）
+     * 同时切换到 bochs->vram_virt（16MB 完整映射），避免 GRUB 小映射越界 Page Fault */
+    fbcon_update_mode(width, height, bochs->current_pitch, bpp,
+                      (unsigned long)bochs->vram_virt);
 
     printk("[bochs-drm] Set mode: %dx%d@%dbpp, pitch=%d, vram_virt=0x%lx\n",
            width, height, bpp, bochs->current_pitch,
@@ -301,15 +363,16 @@ static enum drm_connector_status bochs_connector_detect(struct drm_connector *co
 
 static int bochs_connector_get_modes(struct drm_connector *connector)
 {
+    struct bochs_device *bochs = (struct bochs_device *)connector->driver_private;
     int i;
 
-    /* 填充预设分辨率列表 */
-    connector->num_modes = BOCHS_MODE_COUNT;
-    for (i = 0; i < (int)BOCHS_MODE_COUNT; i++) {
+    /* 填充运行时探测到的分辨率列表 */
+    connector->num_modes = bochs->num_supported_modes;
+    for (i = 0; i < (int)bochs->num_supported_modes; i++) {
         drm_mode_make_default(&connector->modes[i],
-                              bochs_modes[i].width,
-                              bochs_modes[i].height,
-                              bochs_modes[i].refresh);
+                              bochs->supported_modes[i].width,
+                              bochs->supported_modes[i].height,
+                              bochs->supported_modes[i].refresh);
     }
 
     return connector->num_modes;
@@ -365,8 +428,8 @@ static int bochs_drm_load(struct drm_device *dev)
         return DRM_ERR_NODEV;
     }
 
-    /* ioremap VRAM */
-    bochs->vram_virt = fb_ioremap(bochs->vram_phys, bochs->vram_size);
+    /* ioremap VRAM（使用统一 ioremap，虚拟地址在 0xF8000000 区） */
+    bochs->vram_virt = ioremap(bochs->vram_phys, bochs->vram_size);
     if (!bochs->vram_virt) {
         printk("[bochs-drm] ERROR: Failed to ioremap VRAM\n");
         kfree(bochs);
@@ -377,8 +440,18 @@ static int bochs_drm_load(struct drm_device *dev)
            bochs->vram_phys, (unsigned long)bochs->vram_virt,
            bochs->vram_size / (1024 * 1024));
 
-    /* 初始化 BGA 寄存器，设置默认分辨率 */
-    bochs_set_resolution(bochs, 1024, 768, 32);
+    /* 动态探测当前 VRAM 支持的分辨率列表 */
+    bochs_probe_modes(bochs);
+
+    /* 初始化 BGA 寄存器，设置默认分辨率（取探测列表中最大的模式） */
+    if (bochs->num_supported_modes > 0) {
+        struct bochs_mode *best = &bochs->supported_modes[bochs->num_supported_modes - 1];
+        bochs_set_resolution(bochs, best->width, best->height, 32);
+        printk("[bochs-drm] Default mode set to largest supported: %dx%d\n",
+               best->width, best->height);
+    } else {
+        bochs_set_resolution(bochs, 1024, 768, 32);
+    }
 
     /* 创建 KMS 对象 */
     bochs->crtc.driver_private = bochs;
@@ -398,16 +471,17 @@ static int bochs_drm_load(struct drm_device *dev)
     bochs->encoder.crtc = &bochs->crtc;
     bochs->encoder.connector = &bochs->connector;
 
-    /* 打印当前显卡支持的分辨率列表 */
-    printk("[bochs-drm] Supported resolutions (%d modes):\n", (int)BOCHS_MODE_COUNT);
-    for (int i = 0; i < (int)BOCHS_MODE_COUNT; i++) {
-        uint32_t pitch_bytes = bochs_modes[i].width * 4; /* 32bpp = 4 bytes/pixel */
-        uint32_t vram_required = pitch_bytes * bochs_modes[i].height;
-        printk("[bochs-drm]   [%d] %4dx%-4d @ %dHz  pitch=%u bytes  vram_needed=%u KB%s\n",
-               i, bochs_modes[i].width, bochs_modes[i].height,
-               bochs_modes[i].refresh, pitch_bytes,
+    /* 打印当前显卡支持的分辨率列表（动态探测结果） */
+    printk("[bochs-drm] Supported resolutions (%u modes, probed from VRAM=%luMB):\n",
+           bochs->num_supported_modes, bochs->vram_size / (1024 * 1024));
+    for (uint32_t i = 0; i < bochs->num_supported_modes; i++) {
+        uint32_t pitch_bytes = bochs->supported_modes[i].width * 4;
+        uint32_t vram_required = pitch_bytes * bochs->supported_modes[i].height;
+        printk("[bochs-drm]   [%u] %4ux%-4u @ %uHz  pitch=%u bytes  frame=%u KB%s\n",
+               i, bochs->supported_modes[i].width, bochs->supported_modes[i].height,
+               bochs->supported_modes[i].refresh, pitch_bytes,
                vram_required / 1024,
-               vram_required > bochs->vram_size ? " [EXCEEDS VRAM!]" : "");
+               (i == bochs->num_supported_modes - 1) ? "  <-- default" : "");
     }
 
     /* 打印 DRM 设备配置信息汇总 */
@@ -433,12 +507,12 @@ static int bochs_drm_load(struct drm_device *dev)
     printk("[bochs-drm] Virt size    : %dx%d (double buffering)\n",
            bochs->current_width, bochs->virt_height);
     printk("[bochs-drm] Connector    : type=VIRTUAL, status=CONNECTED\n");
-    printk("[bochs-drm] Modes count  : %d supported\n", (int)BOCHS_MODE_COUNT);
+    printk("[bochs-drm] Modes count  : %u supported (probed)\n", bochs->num_supported_modes);
     printk("[bochs-drm] Supported modes:\n");
-    for (int i = 0; i < (int)BOCHS_MODE_COUNT; i++) {
-        printk("[bochs-drm]   [%d] %dx%d @ %dHz\n",
-               i, bochs_modes[i].width, bochs_modes[i].height,
-               bochs_modes[i].refresh);
+    for (uint32_t i = 0; i < bochs->num_supported_modes; i++) {
+        printk("[bochs-drm]   [%u] %ux%u @ %uHz\n",
+               i, bochs->supported_modes[i].width, bochs->supported_modes[i].height,
+               bochs->supported_modes[i].refresh);
     }
     printk("[bochs-drm] GEM handles  : next=%u\n", dev->next_handle);
     printk("[bochs-drm] Registered   : %s\n",
