@@ -8,6 +8,7 @@
 #include <libs/memcpy.h>
 #include <arch/x86/highmem.h> 
 #include <arch/x86/acpi.h>
+#include <video/fb.h>
 #include <tty/tty.h>
 
 unsigned long init_pg_tables_end = ~0UL;
@@ -200,7 +201,14 @@ static __init unsigned long setup_memery(){
 void __init setup_arch(){
     copy_multiboot_info();
     setup_memery(); 
-
+    /*
+     * 初始化 framebuffer 控制台（需要伙伴系统 + slab 就绪，
+     * 因为 fb_ioremap 使用 __alloc_pages 分配 PTE 页表页）
+     */
+    fbcon_init();
+    if (fb.active) {
+        tty_set_mode(TTY_MODE_FB);
+    }
     acpi_tables_init();
     tty_set_buffer_base(PAGE_OFFSET);
 }

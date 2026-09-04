@@ -9,8 +9,7 @@
 #include <arch/x86/page.h>
 #include <arch/x86/pgtable.h>
 #include <arch/x86/highmem.h>
-#include <mm/bootmem.h>
-#include <mm/mm.h>
+#include <mm/bootmem.h> 
 #include <printk.h>
 #include <libs/memcpy.h>
 #include <stdint.h>
@@ -52,14 +51,8 @@ void *fb_ioremap(unsigned long phys_addr, unsigned long size)
 
         /* 若 PDE 不存在，分配一个新页表页 */
         if (pgd_none(*pgd)) {
-            /* 从伙伴系统分配一页作为 PTE 表 */
-            struct page *ptepage = __alloc_pages(0, 0);
-            if (!ptepage) {
-                printk("[fb_ioremap] out of memory allocating PTE for vaddr=0x%lx\n", vaddr);
-                return NULL;
-            }
-            unsigned long pfn       = (unsigned long)(ptepage - mem_map);
-            unsigned long pte_page_va = (unsigned long)__va(pfn << PAGE_SHIFT);
+             /* __alloc_bootmem 返回虚拟地址（已加 PAGE_OFFSET） */
+            unsigned long pte_page_va = (unsigned long)__alloc_bootmem(PAGE_SIZE, PAGE_SIZE, 0);
             memset((void *)pte_page_va, 0, PAGE_SIZE);
             /* PGD 存储物理地址 */
             set_pgd(pgd, __pgd(__pa(pte_page_va) | _KERNPG_TABLE));
