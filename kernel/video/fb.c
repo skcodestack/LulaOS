@@ -14,6 +14,7 @@
 #include <printk.h>
 #include <libs/memcpy.h>
 #include <stdint.h>
+#include <stddef.h>
 
 /* 外部字体数据 */
 extern const unsigned char font_8x16[256][16];
