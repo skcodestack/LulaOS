@@ -20,7 +20,8 @@
 #include <pci/pci.h>
 #include <usb/usb.h>
 #include <usb/uhci.h>
-#include <drm/drm_core.h> 
+#include <drm/drm_core.h>
+#include <drm/drm_fb_helper.h> 
  
 void _kernel_init()
 {
@@ -120,6 +121,12 @@ asmlinkage void _kernel_main()
 
     /* Bochs/QEMU VBE DRM 驱动（发现 VGA 设备并初始化 KMS） */
     drm_bochs_init();
+
+    /* DRM 图形 API 初始化（缓存 VRAM 参数，供画点/画图等接口使用） */
+    drm_fb_helper_init();
+
+    /* 绘制测试图案，验证 DRM 图片显示服务正常工作 */
+    drm_fb_test_image();
 
     /*
      * 切换到 init_thread_union 内核栈并进入 idle 循环
