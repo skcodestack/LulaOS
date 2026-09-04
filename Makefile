@@ -17,6 +17,8 @@ INCLUDES := $(patsubst %, -I% ,$(INCLUDES_DIR))
 OS_NAME := LulaOS
 OS_BIN := $(OS_NAME).bin
 OS_ISO := $(OS_NAME).iso
+OS_IMG := $(OS_NAME).img
+DISK_SIZE := 64M
 
 CC := i686-elf-gcc
 AS := i686-elf-as
@@ -57,12 +59,27 @@ $(BUILD_DIR)/$(OS_ISO): $(ISO_DIR) $(BIN_DIR)/$(OS_BIN) GRUB_TEMPLATE
 	@cp $(BIN_DIR)/$(OS_BIN) $(ISO_BOOT_DIR)
 	@grub-mkrescue -o $(BUILD_DIR)/$(OS_ISO) $(ISO_DIR)
 
-all: clean $(BUILD_DIR)/$(OS_ISO)
+$(BUILD_DIR)/$(OS_IMG): $(BIN_DIR)/$(OS_BIN) GRUB_TEMPLATE
+	@mkdir -p $(BUILD_DIR)
+	@echo "Creating $(DISK_SIZE) disk image..."
+	@dd if=/dev/zero of=$@ bs=1M count=64 status=none
+	@echo "Formatting as ext2..."
+	@mke2fs -F -t ext2 -q $@
+	@echo "Installing GRUB to MBR..."
+	@LOOP_DEV=$$(sudo losetup -f --show $@); \
+	sudo grub-install --target=i386-pc --boot-directory=$(BUILD_DIR)/boot --force $$LOOP_DEV; \
+	sudo mkdir -p $(BUILD_DIR)/boot/grub; \
+	./config-grub.sh $(OS_NAME) | sudo tee $(BUILD_DIR)/boot/grub/grub.cfg > /dev/null; \
+	sudo cp $(BIN_DIR)/$(OS_BIN) $(BUILD_DIR)/boot/; \
+	sudo losetup -d $$LOOP_DEV
+	@echo "Disk image $@ ready"
+
+all: clean $(BUILD_DIR)/$(OS_IMG)
 
 all-debug: O := -O0
 all-debug: CFLAGS := -m32 -g -std=gnu99 -ffreestanding $(O) $(W) -fomit-frame-pointer
 all-debug: LDFLAGS :=  -ffreestanding $(O)   -nostdlib -lgcc
-all-debug: clean $(BUILD_DIR)/$(OS_ISO)
+all-debug: clean $(BUILD_DIR)/$(OS_IMG)
 	@echo "Dumping the disassembled kernel code to $(BUILD_DIR)/kdump.txt"
 	@i686-elf-objdump -D $(BIN_DIR)/$(OS_BIN) > $(BUILD_DIR)/kdump.txt
 
@@ -70,14 +87,14 @@ all-debug: clean $(BUILD_DIR)/$(OS_ISO)
 clean : 
 	@rm -rf $(BUILD_DIR)
 
-run-qemu: $(BUILD_DIR)/$(OS_ISO)
-	@qemu-system-i386 -cdrom $(BUILD_DIR)/$(OS_ISO) -m 2048 -smp 4 -monitor telnet::$(QEMU_MON_PORT),server,nowait &
+run-qemu: $(BUILD_DIR)/$(OS_IMG)
+	@qemu-system-i386 -hda $(BUILD_DIR)/$(OS_IMG) -m 2048 -smp 4 -monitor telnet::$(QEMU_MON_PORT),server,nowait &
 	@sleep 1
 	@telnet 127.0.0.1 $(QEMU_MON_PORT)
 
 debug-qemu: all-debug
 	@i686-elf-objcopy --only-keep-debug $(BIN_DIR)/$(OS_BIN) $(BUILD_DIR)/kernel.dbg
-	@qemu-system-i386 -s -S -cdrom $(BUILD_DIR)/$(OS_ISO) -m 2048 -smp 4 -monitor telnet::$(QEMU_MON_PORT),server,nowait &
+	@qemu-system-i386 -s -S -hda $(BUILD_DIR)/$(OS_IMG) -m 2048 -smp 4 -monitor telnet::$(QEMU_MON_PORT),server,nowait &
 	@sleep 1
 	@$(QEMU_MON_TERM) -e "telnet 127.0.0.1 $(QEMU_MON_PORT)"
 	@gdb -s $(BUILD_DIR)/kernel.dbg -ex "target remote localhost:1234"
