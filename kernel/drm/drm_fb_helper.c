@@ -22,6 +22,7 @@
 #include <video/fb.h>
 #include <printk.h>
 #include <libs/memcpy.h>
+#include <mm/slab.h>    /* kmalloc */
 
 /* 外部字体数据（font_8x16.c 定义，256 字符 x 16 行 x 1 字节/行） */
 extern const unsigned char font_8x16[256][16];
@@ -286,6 +287,114 @@ static void draw_line(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1,
 /* ======================== 测试图案 ======================== */
 
 /*
+ * Tux 企鹅像素精灵（32x42，Run-Length 编码）
+ *
+ * 参考 Linux Tux logo（Larry Ewing 1996 年用 GIMP 绘制）：
+ *   黑色身体轮廓 + 白色肚皮 + 黄色喙和脚蹼
+ *
+ * 编码格式：每个 RLE 元素为 (count, color_index) 二元组
+ *   颜色索引: 0=透明  1=黑色  2=白色  3=黄色  4=浅灰
+ *
+ * 每行解码后恰好 32 像素，共 42 行 = 1344 像素
+ * 以 3x 放大后为 96x126 像素，在屏幕中央清晰可见
+ */
+static const uint8_t tux_rle[][2] = {
+    /* row 00 */ {12,0},{8,1},{12,0},
+    /* row 01 */ {10,0},{12,1},{10,0},
+    /* row 02 */ {8,0},{16,1},{8,0},
+    /* row 03 */ {7,0},{18,1},{7,0},
+    /* row 04 */ {6,0},{20,1},{6,0},
+    /* row 05  eyes */ {6,0},{4,1},{4,2},{4,1},{4,2},{4,1},{6,0},
+    /* row 06 */ {6,0},{20,1},{6,0},
+    /* row 07  beak */ {7,0},{3,1},{12,3},{3,1},{7,0},
+    /* row 08 */ {8,0},{2,1},{12,3},{2,1},{8,0},
+    /* row 09  neck */ {7,0},{18,1},{7,0},
+    /* row 10 */ {5,0},{22,1},{5,0},
+    /* row 11 */ {4,0},{24,1},{4,0},
+    /* row 12  shoulders+belly start */ {3,0},{5,1},{12,2},{5,1},{3,0},  /* belly 12px */
+    /* row 13 */ {3,0},{4,1},{14,2},{4,1},{3,0},
+    /* row 14 */ {2,0},{4,1},{16,2},{4,1},{2,0},
+    /* row 15 */ {2,0},{4,1},{16,2},{4,1},{2,0},
+    /* row 16 */ {2,0},{4,1},{16,2},{4,1},{2,0},
+    /* row 17 */ {2,0},{4,1},{16,2},{4,1},{2,0},
+    /* row 18 */ {2,0},{4,1},{16,2},{4,1},{2,0},
+    /* row 19 */ {2,0},{4,1},{16,2},{4,1},{2,0},
+    /* row 20 */ {2,0},{4,1},{16,2},{4,1},{2,0},
+    /* row 21 */ {2,0},{4,1},{16,2},{4,1},{2,0},
+    /* row 22 */ {3,0},{4,1},{14,2},{4,1},{3,0},
+    /* row 23  belly narrow */ {3,0},{5,1},{12,2},{5,1},{3,0},
+    /* row 24 */ {4,0},{5,1},{10,2},{5,1},{4,0},
+    /* row 25 */ {4,0},{6,1},{8,2},{6,1},{4,0},
+    /* row 26 */ {5,0},{6,1},{6,2},{6,1},{5,0},
+    /* row 27  belly end */ {5,0},{16,1},{5,0},
+    /* row 28 */ {6,0},{14,1},{6,0},
+    /* row 29 */ {7,0},{12,1},{7,0},
+    /* row 30 */ {8,0},{10,1},{8,0},
+    /* row 31  feet gap */ {10,0},{2,1},{8,0},{2,1},{10,0},
+    /* row 32  left foot */ {8,0},{6,3},{8,0},{2,1},{8,0},
+    /* row 33 */ {7,0},{8,3},{7,0},{2,1},{8,0},
+    /* row 34  both feet */ {7,0},{7,3},{6,0},{6,3},{6,0},
+    /* row 35 */ {6,0},{8,3},{4,0},{8,3},{6,0},
+    /* row 36 */ {7,0},{6,3},{6,0},{6,3},{7,0},
+    /* row 37 */ {8,0},{4,3},{8,0},{4,3},{8,0},
+    /* row 38 */ {9,0},{2,3},{10,0},{2,3},{9,0},
+    /* row 39 */ {10,0},{12,0},{10,0},
+    /* row 40 */ {12,0},{8,0},{12,0},
+    /* row 41 */ {14,0},{4,0},{14,0},
+};
+
+/* Tux 调色板（XRGB8888） */
+static const uint32_t tux_palette[5] = {
+    0x00000000,   /* 0 = 透明（不写像素） */
+    0x00111111,   /* 1 = 深黑（身体轮廓） */
+    0x00EEEEEE,   /* 2 = 亮白（肚皮）   */
+    0x00FF8C00,   /* 3 = 橙黄（喙/脚）  */
+    0x00555555,   /* 4 = 灰色（未使用，预留） */
+};
+
+#define TUX_SPRITE_W   32
+#define TUX_SPRITE_H   42
+#define TUX_RLE_COUNT  (sizeof(tux_rle) / sizeof(tux_rle[0]))
+
+/*
+ * draw_tux_sprite - 解码 RLE 数据并绘制放大的 Tux 精灵
+ *
+ * 使用最近邻插值放大 scale 倍，直接在 VRAM 上绘制。
+ * 透明像素（index=0）不写入，保留背景。
+ *
+ * @x, @y: 精灵左上角坐标
+ * @scale: 放大倍数（1=原始大小，3=三倍放大）
+ */
+static void draw_tux_sprite(uint32_t x, uint32_t y, uint32_t scale)
+{
+    uint32_t row = 0;
+    uint32_t col = 0;
+
+    for (uint32_t i = 0; i < TUX_RLE_COUNT; i++) {
+        uint32_t count = tux_rle[i][0];
+        uint32_t idx   = tux_rle[i][1];
+        uint32_t color = tux_palette[idx];
+
+        for (uint32_t n = 0; n < count; n++) {
+            /* 仅在非透明像素时写入（3x3 放大块） */
+            if (idx != 0) {
+                for (uint32_t sy = 0; sy < scale; sy++) {
+                    for (uint32_t sx = 0; sx < scale; sx++) {
+                        drm_fb_put_pixel(x + col * scale + sx,
+                                         y + row * scale + sy, color);
+                    }
+                }
+            }
+            col++;
+            if (col >= TUX_SPRITE_W) {
+                col = 0;
+                row++;
+            }
+        }
+    }
+}
+
+/*
  * SMPTE 标准色条颜色（8 条，从左到右）
  * 白/黄/青/绿/洋红/红/蓝/黑
  */
@@ -414,7 +523,7 @@ void drm_fb_test_image(void)
         /* 蓝色矩形 */
         drm_fb_fill_rect(rx + (rect_w + gap) * 2, ry, rect_w, rect_h, 0x004444FF);
 
-        printk("[drm-fb]   [3/4] Filled rectangles at y=%u (R/G/B)\n", ry);
+        printk("[drm-fb]   [3/5] Filled rectangles at y=%u (R/G/B)\n", ry);
     }
 
     /* =========================================================
@@ -443,12 +552,38 @@ void drm_fb_test_image(void)
         draw_line(cx, cy + rh, cx - rw, cy,      color_diamond);   /* 下→左 */
         draw_line(cx - rw, cy, cx, cy - rh,      color_diamond);   /* 左→上 */
 
-        printk("[drm-fb]   [3.5/4] Diamond outline at center (%u,%u) rw=%u rh=%u\n",
+        printk("[drm-fb]   [3.5/5] Diamond outline at center (%u,%u) rw=%u rh=%u\n",
                cx, cy, rw, rh);
     }
 
     /* =========================================================
-     * Step 6: LulaOS 文字（屏幕底部，居中）
+     * Step 6: Tux 企鹅精灵（3 倍放大，屏幕居中）
+     *
+     * 原始 32x42 像素，以最近邻插值放大到 96x126
+     * RLE 编码数据，解码后直接写 VRAM，透明像素保留背景
+     * ========================================================= */
+    {
+        uint32_t scale = 3;
+        uint32_t tux_w = TUX_SPRITE_W * scale;   /* 96  */
+        uint32_t tux_h = TUX_SPRITE_H * scale;   /* 126 */
+        uint32_t tx = (fb_width  > tux_w) ? (fb_width  - tux_w) / 2 : 0;
+        /* 放置在菱形下方，距屏幕底部留足文字空间 */
+        uint32_t ty = fb_height - tux_h - 60;
+
+        draw_tux_sprite(tx, ty, scale);
+
+        /* Tux 脚下加一行标签 */
+        const char *label = "Tux - Linux Mascot";
+        uint32_t label_w = 18 * 8;
+        uint32_t lx = (fb_width > label_w) ? (fb_width - label_w) / 2 : 0;
+        drm_fb_draw_string(label, lx, ty + tux_h + 4, 0x00CCCCCC, 0x00000000);
+
+        printk("[drm-fb]   [4/5] Tux sprite drawn at (%u,%u) scale=%ux (%ux%u px)\n",
+               tx, ty, scale, tux_w, tux_h);
+    }
+
+    /* =========================================================
+     * Step 7: LulaOS 文字（屏幕底部，居中）
      *
      * 字符串长 22 字符 × 8 像素 = 176 像素
      * ========================================================= */
@@ -467,7 +602,7 @@ void drm_fb_test_image(void)
         uint32_t sx = (fb_width > sub_w) ? (fb_width - sub_w) / 2 : 0;
         drm_fb_draw_string(sub, sx, ty + 18, 0x00AAAAAA, 0x00000000);
 
-        printk("[drm-fb]   [4/4] Text drawn at y=%u: '%s'\n", ty, text);
+        printk("[drm-fb]   [5/5] Text drawn at y=%u: '%s'\n", ty, text);
     }
 
     printk("[drm-fb] Test image complete. DRM image display service verified.\n");
