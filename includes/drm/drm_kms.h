@@ -55,8 +55,8 @@ enum drm_connector_type {
     DRM_CONNECTOR_TYPE_VIRTUAL = 15,    /* 虚拟显示器 */
 };
 
-/* 每个 Connector 支持的最大分辨率数 */
-#define DRM_MAX_MODES           8
+/* 每个 Connector 支持的最大分辨率数（与 bochs BOCHS_MAX_MODES 对齐） */
+#define DRM_MAX_MODES           16
 
 /* ======================== 显示模式 ======================== */
 

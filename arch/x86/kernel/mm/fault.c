@@ -56,6 +56,20 @@ handle_pte_fault 三种情况：
 /* __flush_tlb_all / __flush_tlb_one 已移至 pgtable.h */
 
 /*
+ * ioremap 虚拟地址区域边界（与 ioremap.c 保持一致）
+ *
+ * 该区域的页表条目由 fb_ioremap / ioremap 主动建立，
+ * PTE 为 0 意味着映射丢失，绝不能走 Demand Paging 分配普通 RAM 页。
+ */
+#define IOREMAP_START   0xF8000000UL   /* FB_IOREMAP_BASE */
+#define IOREMAP_END     0xFE000000UL   /* VMALLOC_END（PKMAP 之前） */
+
+static inline int is_ioremap_addr(unsigned long addr)
+{
+    return addr >= IOREMAP_START && addr < IOREMAP_END;
+}
+
+/*
  * 按需分配一个页表页（1024个PTE条目，4KB），清零后返回内核虚拟地址
  * 供 PGD 缺失时调用
  */
@@ -190,6 +204,14 @@ asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long error_code)
 
     /* ---- 内核空间地址（>= PAGE_OFFSET）---- */
     if (address >= PAGE_OFFSET) {
+        /* ioremap 区域的 PTE 必须由 ioremap 主动建立，
+         * PTE 为 0 说明映射丢失，禁止走 Demand Paging 分配普通 RAM 页 */
+        if (is_ioremap_addr(address)) {
+            printk("[BUG] Page fault in ioremap region: addr=%#lx, EIP=%#lx\n",
+                   address, regs->eip);
+            goto fault_panic;
+        }
+
         if (pgd_none(*pgd)) {
             /* 内核按需映射：为缺失的 PDE 分配 PTE 页表 */
             if (handle_pde_fault(pgd, address, error_code) == 0)
