@@ -109,4 +109,22 @@ static inline pte_t *pte_offset(pgd_t *dir, unsigned long address)
 
 #define mk_pte_phys(physpage, pgprot)	__mk_pte((physpage) >> PAGE_SHIFT, pgprot)
 
+/*
+ * TLB 刷新
+ *
+ * __flush_tlb_all : 重载 CR3，刷新全部 TLB 条目（适用于页表批量变更）
+ * __flush_tlb_one : invlpg 刷新单个虚拟地址的 TLB 条目
+ */
+static inline void __flush_tlb_all(void)
+{
+	unsigned long cr3;
+	__asm__ __volatile__("movl %%cr3, %0" : "=r"(cr3));
+	__asm__ __volatile__("movl %0, %%cr3" :: "r"(cr3) : "memory");
+}
+
+static inline void __flush_tlb_one(unsigned long addr)
+{
+	__asm__ __volatile__("invlpg (%0)" :: "r"(addr) : "memory");
+}
+
 #endif

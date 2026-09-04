@@ -71,14 +71,6 @@ struct vm_struct {
 static struct vm_struct *vmlist = NULL;
 static unsigned long vmalloc_next = 0;
 
-/* ======================== TLB 刷新 ======================== */
-
-/* 刷新单条 TLB 条目 */
-static inline void __flush_tlb_one(unsigned long addr)
-{
-    __asm__ __volatile__("invlpg (%0)" :: "r"(addr) : "memory");
-}
-
 /* ======================== 虚拟地址区域分配 ======================== */
 
 /*
@@ -174,11 +166,10 @@ static int ioremap_pte_range(pgd_t *pgd, unsigned long addr,
         set_pgd(pgd, __pgd(__pa(pte_base) + _KERNPG_TABLE));
     }
 
-    /* 定位 PTE 并逐页填入映射 */
+    /* 定位 PTE 并逐页填入映射（与 fb_ioremap 保持一致：物理地址 | 保护位） */
     pte = pte_offset(pgd, addr);
     do {
-        unsigned long pfn = phys_addr >> PAGE_SHIFT;
-        set_pte(pte, __mk_pte(pfn, prot));
+        set_pte(pte, __pte(phys_addr | pgprot_val(prot)));
         phys_addr += PAGE_SIZE;
     } while (pte++, addr += PAGE_SIZE, addr < end);
 
@@ -199,7 +190,7 @@ static int ioremap_page_range(unsigned long addr, unsigned long end,
     pgd_t *pgd;
     unsigned long next;
 
-    pgd = pgd_offset(swapper_pg_dir, addr);
+    pgd = swapper_pg_dir + pgd_index(addr);
     do {
         /* 当前 PGD 块的结束地址 */
         next = (addr + PGDIR_SIZE) & PGDIR_MASK;
@@ -213,12 +204,8 @@ static int ioremap_page_range(unsigned long addr, unsigned long end,
         addr = next;
     } while (pgd++, addr < end);
 
-    /* 刷新整个 TLB，确保所有 CPU 看到新映射 */
-    __asm__ __volatile__(
-        "movl %%cr3, %%eax\n\t"
-        "movl %%eax, %%cr3"
-        ::: "eax", "memory"
-    );
+    /* 刷新 TLB，确保所有 CPU 看到新映射 */
+    __flush_tlb_all();
 
     return 0;
 }
@@ -276,9 +263,8 @@ void *ioremap(unsigned long phys_addr, unsigned long size)
     area->phys_addr = aligned_phys;
     area->flags     = VM_IOREMAP;
 
-    /* ⑤ 构造保护位：Present + RW + Dirty + Accessed + PCD（禁用缓存） */
-    prot = __pgprot(_PAGE_PRESENT | _PAGE_RW | _PAGE_DIRTY
-                    | _PAGE_ACCESSED | _PAGE_PCD);
+    /* 保护位：直接复用 PAGE_KERNEL_NOCACHE（Present+RW+Dirty+Accessed+PCD） */
+    prot = PAGE_KERNEL_NOCACHE;
 
     /* ⑥ 建立页表映射 */
     if (ioremap_page_range((unsigned long)area->addr,
@@ -350,14 +336,15 @@ void iounmap(void *addr)
 
     /* 清除所有 PTE 条目（解除映射，不释放物理页） */
     while (vaddr < vaddr_end) {
-        pgd_t *pgd = pgd_offset(swapper_pg_dir, vaddr);
+        pgd_t *pgd = swapper_pg_dir + pgd_index(vaddr);
         if (!pgd_none(*pgd)) {
             pte_t *pte = pte_offset(pgd, vaddr);
             set_pte(pte, __pte(0));
-            __flush_tlb_one(vaddr);
         }
         vaddr += PAGE_SIZE;
     }
+    /* 全部清除后统一刷新 TLB */
+    __flush_tlb_all();
 
     /* 从链表移除 */
     *p = area->next;
@@ -400,8 +387,9 @@ static int vmalloc_pte_range(pgd_t *pgd, unsigned long addr,
             printk("vmalloc: out of memory at addr=%#lx\n", addr);
             return -1;
         }
-        unsigned long pfn = (unsigned long)(page - mem_map);
-        set_pte(pte, __mk_pte(pfn, prot));
+        unsigned long pfn  = (unsigned long)(page - mem_map);
+        unsigned long phys = pfn << PAGE_SHIFT;
+        set_pte(pte, __pte(phys | pgprot_val(prot)));
     } while (pte++, addr += PAGE_SIZE, addr < end);
 
     return 0;
@@ -419,7 +407,7 @@ static int vmalloc_page_range(unsigned long addr, unsigned long end,
     pgd_t *pgd;
     unsigned long next;
 
-    pgd = pgd_offset(swapper_pg_dir, addr);
+    pgd = swapper_pg_dir + pgd_index(addr);
     do {
         next = (addr + PGDIR_SIZE) & PGDIR_MASK;
         if (next > end || next < addr)
@@ -432,11 +420,7 @@ static int vmalloc_page_range(unsigned long addr, unsigned long end,
     } while (pgd++, addr < end);
 
     /* 刷新 TLB */
-    __asm__ __volatile__(
-        "movl %%cr3, %%eax\n\t"
-        "movl %%eax, %%cr3"
-        ::: "eax", "memory"
-    );
+    __flush_tlb_all();
 
     return 0;
 }
@@ -472,8 +456,8 @@ void *vmalloc(unsigned long size)
         return NULL;
     area->flags = VM_ALLOC;
 
-    /* 普通内核内存：可缓存（不带 _PAGE_PCD） */
-    prot = __pgprot(_PAGE_PRESENT | _PAGE_RW | _PAGE_DIRTY | _PAGE_ACCESSED);
+    /* 普通内核内存：可缓存，直接使用 PAGE_KERNEL */
+    prot = PAGE_KERNEL;
 
     /* 逐页分配物理页并建立映射 */
     if (vmalloc_page_range((unsigned long)area->addr,
@@ -531,7 +515,7 @@ void vfree(void *addr)
 
     /* 读 PTE 获取 PFN，归还物理页，并清除 PTE */
     while (vaddr < vaddr_end) {
-        pgd_t *pgd = pgd_offset(swapper_pg_dir, vaddr);
+        pgd_t *pgd = swapper_pg_dir + pgd_index(vaddr);
         if (!pgd_none(*pgd)) {
             pte_t *pte = pte_offset(pgd, vaddr);
             if (pte_present(*pte)) {
@@ -539,10 +523,11 @@ void vfree(void *addr)
                 __free_page(mem_map + pfn);
             }
             set_pte(pte, __pte(0));
-            __flush_tlb_one(vaddr);
         }
         vaddr += PAGE_SIZE;
     }
+    /* 全部清除后统一刷新 TLB */
+    __flush_tlb_all();
 
     /* 从链表移除 */
     *p = area->next;

@@ -40,15 +40,7 @@ void fbcon_update_mode(uint32_t width, uint32_t height, uint32_t pitch, uint32_t
 /* ioremap: 将物理地址映射到 vmalloc 区域的虚拟地址 */
 void *fb_ioremap(unsigned long phys_addr, unsigned long size);
 
-/* TLB 刷新 */
-static inline void __flush_tlb_all(void)
-{
-    __asm__ __volatile__(
-        "movl %%cr3, %%eax\n\t"
-        "movl %%eax, %%cr3\n\t"
-        ::: "eax", "memory"
-    );
-}
+/* TLB 刷新已移至 arch/x86/pgtable.h，包括 pgtable.h 即可使用 */
 
 /* Framebuffer 映射起始虚拟地址（vmalloc 区域内） */
 #define FB_IOREMAP_BASE  0xF8000000UL

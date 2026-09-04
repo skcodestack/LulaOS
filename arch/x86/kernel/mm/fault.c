@@ -53,19 +53,7 @@ handle_pte_fault 三种情况：
 
  */
 
-/* 刷新整个 TLB（重载 CR3） */
-static inline void __flush_tlb_all(void)
-{
-    unsigned long cr3;
-    __asm__ __volatile__("movl %%cr3, %0" : "=r"(cr3));
-    __asm__ __volatile__("movl %0, %%cr3" :: "r"(cr3) : "memory");
-}
-
-/* 刷新单条 TLB 条目 */
-static inline void __flush_tlb_one(unsigned long addr)
-{
-    __asm__ __volatile__("invlpg (%0)" :: "r"(addr) : "memory");
-}
+/* __flush_tlb_all / __flush_tlb_one 已移至 pgtable.h */
 
 /*
  * 按需分配一个页表页（1024个PTE条目，4KB），清零后返回内核虚拟地址
@@ -198,7 +186,7 @@ asmlinkage void do_page_fault(struct pt_regs *regs, unsigned long error_code)
     }
 
     /* 查找地址所属的 PGD 条目（swapper_pg_dir 为内核全局页目录） */
-    pgd_t *pgd = pgd_offset(swapper_pg_dir, address);
+    pgd_t *pgd = swapper_pg_dir + pgd_index(address);
 
     /* ---- 内核空间地址（>= PAGE_OFFSET）---- */
     if (address >= PAGE_OFFSET) {
