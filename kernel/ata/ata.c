@@ -193,10 +193,13 @@ static void ata_identify(struct ata_host *host, unsigned char drive,
 {
     unsigned char status;
     unsigned int i;
+    int ch_idx = (host->irq == ATA_PRIMARY_IRQ) ? 0 : 1;
 
     dev->host = host;
     dev->drive = drive;
     dev->present = 0;
+
+    printk("ATA: ch%d drive%d: probing...\n", ch_idx, drive);
 
     /* 选择驱动器：清除 DEV 位设置 master/slave */
     ata_outb(host, ATA_REG_DEVICE, drive ? ATA_DEV_SLAVE : 0);
@@ -206,8 +209,11 @@ static void ata_identify(struct ata_host *host, unsigned char drive,
 
     /* 等待 BSY 清零 */
     status = ata_wait_bsy_clear(host);
-    if (status == 0xFF)
+    if (status == 0xFF) {
+        printk("ATA: ch%d drive%d: BSY never cleared (timeout)\n", ch_idx, drive);
         return;
+    }
+    printk("ATA: ch%d drive%d: initial status=%02x\n", ch_idx, drive, status);
 
     /* 清零 Sector Count 和 LBA 寄存器（IDENTIFY 要求） */
     ata_outb(host, ATA_REG_NSECTORS, 0);
@@ -223,13 +229,27 @@ static void ata_identify(struct ata_host *host, unsigned char drive,
 
     /* 检查状态 */
     status = ata_ctrl_inb(host);
+    printk("ATA: ch%d drive%d: post-IDENTIFY status=%02x\n", ch_idx, drive, status);
+
     if (status == 0)
         return;     /* 无设备 */
 
     /* 轮询等待 BSY 清零 */
     status = ata_wait_bsy_clear(host);
-    if (status == 0xFF)
+    if (status == 0xFF) {
+        printk("ATA: ch%d drive%d: BSY stuck after IDENTIFY\n", ch_idx, drive);
         return;
+    }
+    printk("ATA: ch%d drive%d: post-BSY status=%02x err=%02x\n",
+           ch_idx, drive, status, ata_inb(host, ATA_REG_ERROR));
+
+    /* 检查 ERR 位：ABRT (0x04) = 设备不支持 IDENTIFY 或无设备 */
+    if (status & ATA_STATUS_ERR) {
+        unsigned char err = ata_inb(host, ATA_REG_ERROR);
+        printk("ATA: ch%d drive%d: IDENTIFY error (status=%02x err=%02x)\n",
+               ch_idx, drive, status, err);
+        return;
+    }
 
     /* 检查 LBA1/LBA2 签名（ATAPI 设备标识） */
     {
@@ -239,7 +259,7 @@ static void ata_identify(struct ata_host *host, unsigned char drive,
         if (lba1 == 0x14 && lba2 == 0xEB) {
             /* ATAPI 设备 — 本驱动暂不处理 */
             printk("ATA: ch%d drive%d: ATAPI device detected (not supported)\n",
-                   host->irq == ATA_PRIMARY_IRQ ? 0 : 1, drive);
+                   ch_idx, drive);
             return;
         }
     }
@@ -247,15 +267,27 @@ static void ata_identify(struct ata_host *host, unsigned char drive,
     /* 等待 DRQ 或 ERR */
     status = ata_wait_drq(host);
     if (status == 0xFF) {
-        /* 可能设备不支持 IDENTIFY，尝试 IDENTIFY PACKET */
-        printk("ATA: ch%d drive%d: IDENTIFY failed\n",
-               host->irq == ATA_PRIMARY_IRQ ? 0 : 1, drive);
+        printk("ATA: ch%d drive%d: DRQ never asserted\n", ch_idx, drive);
         return;
     }
 
     /* 读取 256 words (512 bytes) IDENTIFY 数据 */
     for (i = 0; i < 256; i++)
         dev->identify[i] = ata_inw_data(host);
+
+    /*
+     * 清除中断：ATA PIO 协议要求每次数据传输完成后，
+     * 主机必须读一次主 Status 寄存器（0x1F7）来 acknowledge 中断。
+     * 不读的话驱动器停留在 INTRQ 挂起状态，下一条命令会被拒绝。
+     */
+    status = ata_inb(host, ATA_REG_STATUS);
+    printk("ATA: ch%d drive%d: post-read status=%02x\n", ch_idx, drive, status);
+
+    /* 再次检查 ERR：某些设备在数据传输后才报错 */
+    if (status & ATA_STATUS_ERR) {
+        printk("ATA: ch%d drive%d: error after IDENTIFY data transfer\n", ch_idx, drive);
+        return;
+    }
 
     /* 检查 LBA 支持 */
     if (!(dev->identify[ATA_ID_CAPS] & ATA_CAPS_LBA)) {
@@ -328,12 +360,19 @@ int ata_pio_read_sectors(struct ata_host *host, unsigned char drive,
     if (!count)
         return -1;
 
-    /* 等待设备就绪 */
-    status = ata_wait_ready(host);
+    /* 等待 BSY 清零（不强制要求 DRDY=1，部分模拟器 IDENTIFY 后不立即置 DRDY） */
+    status = ata_wait_bsy_clear(host);
     if (status == 0xFF) {
-        printk("ATA: read - device not ready\n");
+        unsigned char alt = ata_ctrl_inb(host);
+        printk("ATA: read - BSY stuck (status=%02x alt=%02x)\n", status, alt);
         return -1;
     }
+    if (status & ATA_STATUS_ERR) {
+        printk("ATA: read - pre-command error (status=%02x err=%02x)\n",
+               status, ata_inb(host, ATA_REG_ERROR));
+        return -1;
+    }
+    printk("ATA: read - ready (status=%02x)\n", status);
 
     /* 设置扇区数 */
     ata_outb(host, ATA_REG_NSECTORS, count);
@@ -366,6 +405,17 @@ int ata_pio_read_sectors(struct ata_host *host, unsigned char drive,
         /* 读取 256 words = 512 bytes */
         for (i = 0; i < 256; i++)
             p[s * 256 + i] = ata_inw_data(host);
+
+        /* 清除本扇区传输完成中断，让驱动器可以继续下一扇区 */
+        ata_inb(host, ATA_REG_STATUS);
+    }
+
+    /* 最终状态检查 */
+    status = ata_wait_bsy_clear(host);
+    if (status & ATA_STATUS_ERR) {
+        printk("ATA: read completed with error (status=%02x err=%02x)\n",
+               status, ata_inb(host, ATA_REG_ERROR));
+        return -1;
     }
 
     return 0;
@@ -392,10 +442,10 @@ int ata_pio_write_sectors(struct ata_host *host, unsigned char drive,
     if (!count)
         return -1;
 
-    /* 等待设备就绪 */
-    status = ata_wait_ready(host);
+    /* 等待 BSY 清零 */
+    status = ata_wait_bsy_clear(host);
     if (status == 0xFF) {
-        printk("ATA: write - device not ready\n");
+        printk("ATA: write - BSY stuck\n");
         return -1;
     }
 
@@ -429,11 +479,18 @@ int ata_pio_write_sectors(struct ata_host *host, unsigned char drive,
         /* 写入 256 words = 512 bytes */
         for (i = 0; i < 256; i++)
             ata_outw_data(host, p[s * 256 + i]);
+
+        /* 清除本扇区写入完成中断 */
+        ata_inb(host, ATA_REG_STATUS);
     }
 
     /* 刷新写缓存 */
     ata_outb(host, ATA_REG_COMMAND, ATA_CMD_CACHE_FLUSH);
-    ata_wait_bsy_clear(host);
+    status = ata_wait_bsy_clear(host);
+    if (status & ATA_STATUS_ERR) {
+        printk("ATA: cache flush failed (status=%02x)\n", status);
+        return -1;
+    }
 
     return 0;
 }
@@ -514,10 +571,12 @@ static int ata_pci_probe(struct pci_dev *pdev,
     }
 
     /* 验证测试：读取 MBR（LBA 0） */
+    printk("ATA: scan complete. ch0-drive0 present=%d\n", ata_devices[0][0].present);
     if (ata_devices[0][0].present) {
         unsigned char mbr[512];
         unsigned short sig;
 
+        printk("ATA: attempting MBR read (LBA 0)...\n");
         if (ata_pio_read_sectors(&ata_hosts[0], 0, 0, 1, mbr) == 0) {
             sig = (unsigned short)(mbr[511] << 8 | mbr[510]);
             printk("ATA: MBR read OK, signature=0x%04X\n", sig);
