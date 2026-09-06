@@ -97,6 +97,7 @@ clean :
 	sudo rm -rf $(BUILD_DIR)
 
 run-qemu: $(BUILD_DIR)/$(OS_IMG)
+# @qemu-system-i386 -hda $(BUILD_DIR)/$(OS_IMG) -m 2048 -smp 4 -monitor telnet::$(QEMU_MON_PORT),server,nowait &
 	@qemu-system-i386 -drive file=$(BUILD_DIR)/$(OS_IMG),if=none,id=hd0,format=raw -device piix3-ide -device ide-hd,drive=hd0 -m 2048 -smp 4 -monitor telnet::$(QEMU_MON_PORT),server,nowait &
 	@sleep 1
 	@telnet 127.0.0.1 $(QEMU_MON_PORT)
