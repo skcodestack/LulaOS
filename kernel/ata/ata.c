@@ -37,6 +37,9 @@ static struct ata_host  ata_hosts[2];
 /* 每个通道最多 2 个设备：[ch][drive] */
 static struct ata_device ata_devices[2][2];
 
+/* 防重入标志：只允许第一个 IDE 控制器绑定，忽略后续发现的控制器 */
+static int ata_initialized = 0;
+
 /* ======================== I/O 端口访问辅助 ======================== */
 
 /*
@@ -464,6 +467,14 @@ static int ata_pci_probe(struct pci_dev *pdev,
     int ch, drive;
 
     (void)id;
+
+    /* 防重入：全局 ata_hosts/ata_devices 只容纳一个控制器，忽略后续发现的 */
+    if (ata_initialized) {
+        printk("ATA: ignoring additional IDE controller at %02x:%02x.%x\n",
+               pdev->bus, pdev->devfn >> 3, pdev->devfn & 7);
+        return -1;
+    }
+    ata_initialized = 1;
 
     printk("ATA: found IDE controller at %02x:%02x.%x [%04x:%04x]\n",
            pdev->bus, pdev->devfn >> 3, pdev->devfn & 7,
