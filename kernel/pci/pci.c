@@ -243,6 +243,24 @@ static int pci_bus_init(void)
 /* ======================== 设备扫描 ======================== */
 
 /*
+ * pci_is_known_multifunc - PCI quirk：已知多功能设备白名单
+ *
+ * 某些模拟器和芯片组的 header_type 未正确设置 multi-function 位，
+ * 例如 Bochs/QEMU PIIX3 ISA Bridge (8086:7000)。
+ * 参考 Linux drivers/pci/probe.c pci_scan_slot() 的类似处理。
+ */
+static int pci_is_known_multifunc(unsigned short vendor, unsigned short device)
+{
+    /* PIIX3 ISA Bridge — Bochs/QEMU 的 IDE/USB/PM 都在此设备的其他 function 上 */
+    if (vendor == 0x8086 && device == 0x7000)
+        return 1;
+    /* PIIX4 ISA Bridge */
+    if (vendor == 0x8086 && device == 0x7110)
+        return 1;
+    return 0;
+}
+
+/*
  * pci_scan_device - 扫描单个 PCI 设备
  *
  * 读取 Vendor ID，若有效则分配 pci_dev 结构并填充所有字段。
@@ -338,7 +356,8 @@ static void pci_scan_bus(unsigned char bus)
 
             /* 只对 Function 0 检查 multi-function 标志 */
             if (fn == 0) {
-                if (pdev && (pdev->header_type & PCI_HEADER_MULTIFUNC))
+                if (pdev && ((pdev->header_type & PCI_HEADER_MULTIFUNC) ||
+                             pci_is_known_multifunc(pdev->vendor, pdev->device)))
                     is_multifunc = 1;
 
                 if (!is_multifunc)

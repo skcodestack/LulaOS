@@ -18,6 +18,7 @@
 #include <i8042.h>
 #include <arch/x86/acpi.h>
 #include <pci/pci.h>
+#include <ata/ata.h>
 #include <usb/usb.h>
 #include <usb/uhci.h>
 #include <drm/drm_core.h>
@@ -109,6 +110,9 @@ asmlinkage void _kernel_main()
 
     /* PCI 总线枚举（需要 kmalloc 就绪） */
     pci_init();
+
+    /* ATA 磁盘驱动初始化（PCI 驱动注册 + IDENTIFY 探测） */
+    ata_init();
 
     /* USB 总线注册（注册 usb_bus_type，须先于 UHCI 驱动） */
     usb_init();

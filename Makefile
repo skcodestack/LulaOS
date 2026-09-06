@@ -97,13 +97,13 @@ clean :
 	sudo rm -rf $(BUILD_DIR)
 
 run-qemu: $(BUILD_DIR)/$(OS_IMG)
-	@qemu-system-i386 -hda $(BUILD_DIR)/$(OS_IMG) -m 2048 -smp 4 -monitor telnet::$(QEMU_MON_PORT),server,nowait &
+	@qemu-system-i386 -drive file=$(BUILD_DIR)/$(OS_IMG),if=none,id=hd0,format=raw -device piix3-ide -device ide-hd,drive=hd0 -m 2048 -smp 4 -monitor telnet::$(QEMU_MON_PORT),server,nowait &
 	@sleep 1
 	@telnet 127.0.0.1 $(QEMU_MON_PORT)
 
 debug-qemu: all-debug
 	@i686-elf-objcopy --only-keep-debug $(BIN_DIR)/$(OS_BIN) $(BUILD_DIR)/kernel.dbg
-	@qemu-system-i386 -s -S -hda $(BUILD_DIR)/$(OS_IMG) -m 2048 -smp 4 -monitor telnet::$(QEMU_MON_PORT),server,nowait &
+	@qemu-system-i386 -s -S -drive file=$(BUILD_DIR)/$(OS_IMG),if=none,id=hd0,format=raw -device piix3-ide -device ide-hd,drive=hd0 -m 2048 -smp 4 -monitor telnet::$(QEMU_MON_PORT),server,nowait &
 	@sleep 1
 	@$(QEMU_MON_TERM) -e "telnet 127.0.0.1 $(QEMU_MON_PORT)"
 	@gdb -s $(BUILD_DIR)/kernel.dbg -ex "target remote localhost:1234"
