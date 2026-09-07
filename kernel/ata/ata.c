@@ -97,6 +97,54 @@ static inline void ata_400ns_delay(struct ata_host *host)
     ata_ctrl_inb(host);
 }
 
+/* ======================== Bus Master DMA I/O 辅助 ======================== */
+
+/*
+ * BM 寄存器布局（相对 BM 基址）：
+ *   Primary:   CMD=base+0, STS=base+2, PRDT=base+4
+ *   Secondary: CMD=base+8, STS=base+10, PRDT=base+12
+ * 这里 channel = (irq == 14) ? 0 : 1
+ */
+static inline unsigned char bm_channel(struct ata_host *host)
+{
+    return (host->irq == ATA_PRIMARY_IRQ) ? 0 : 1;
+}
+
+static inline void bm_outb(struct ata_host *host, unsigned char off, unsigned char val)
+{
+    outb(val, (unsigned short)(host->bm_base + off));
+}
+
+static inline unsigned char bm_inb(struct ata_host *host, unsigned char off)
+{
+    return inb((unsigned short)(host->bm_base + off));
+}
+
+static inline void bm_outl(struct ata_host *host, unsigned char off, unsigned int val)
+{
+    outl(val, (unsigned short)(host->bm_base + off));
+}
+
+/*
+ * bm_cmd_off / bm_sts_off / bm_prdt_off - 通道级寄存器偏移
+ *
+ * Primary 通道偏移为 0，Secondary 通道偏移为 8。
+ */
+static inline unsigned char bm_cmd_off(struct ata_host *host)
+{
+    return bm_channel(host) ? BM_SEC_CMD : BM_PRIM_CMD;
+}
+
+static inline unsigned char bm_sts_off(struct ata_host *host)
+{
+    return bm_channel(host) ? BM_SEC_STS : BM_PRIM_STS;
+}
+
+static inline unsigned char bm_prdt_off(struct ata_host *host)
+{
+    return bm_channel(host) ? BM_SEC_PRDT : BM_PRIM_PRDT;
+}
+
 /* ======================== 轮询等待辅助 ======================== */
 
 /*
@@ -331,10 +379,18 @@ static void ata_identify(struct ata_host *host, unsigned char drive,
     dev->present = 1;
     host->present = 1;
 
-    printk("ATA: ch%d drive%d: model='%s' serial='%s' sectors=%u (%u MB)\n",
+    /*
+     * 检测 DMA 能力：
+     *   IDENTIFY word 49 bit8 = 1 表示驱动器支持 DMA。
+     *   还需 host->dma_ok（BAR4 有效 + Bus Master 已使能）才能实际使用。
+     */
+    if ((dev->identify[ATA_ID_CAPS] & ATA_CAPS_DMA) && host->dma_ok)
+        dev->dma_ok = 1;
+
+    printk("ATA: ch%d drive%d: model='%s' serial='%s' sectors=%u (%u MB) dma=%d\n",
            host->irq == ATA_PRIMARY_IRQ ? 0 : 1,
            drive, dev->model, dev->serial,
-           dev->sectors, dev->sectors / 2048);
+           dev->sectors, dev->sectors / 2048, dev->dma_ok);
 }
 
 /* ======================== PIO 数据传输 ======================== */
@@ -495,6 +551,400 @@ int ata_pio_write_sectors(struct ata_host *host, unsigned char drive,
     return 0;
 }
 
+/* ======================== Bus Master DMA 初始化 ======================== */
+
+/*
+ * ata_dma_init_channel - 为通道分配 PRD 表并注册到 BM 寄存器
+ *
+ * 每个通道独立一份 PRD 表，kmalloc 分配的地址在 LulaOS 平坦映射下
+ * 物理地址 = 虚拟地址。PRD 表写入 BM_PRIM_PRDT / BM_SEC_PRDT 寄存器。
+ *
+ * 必须在 BAR4 读取和 Bus Master 使能之后调用。
+ */
+static void ata_dma_init_channel(struct ata_host *host)
+{
+    if (!host->dma_ok)
+        return;
+
+    /* 分配 PRD 表（单条目，8 字节，最多 64KB 传输） */
+    host->prd_table = (struct ata_prd *)kmalloc(sizeof(struct ata_prd));
+    if (!host->prd_table) {
+        printk("ATA: DMA: PRD table allocation failed for ch%d\n",
+               bm_channel(host));
+        host->dma_ok = 0;
+        return;
+    }
+
+    /* LulaOS 平坦内存：虚拟地址 = 物理地址 */
+    host->prd_phys = (unsigned int)(unsigned long)host->prd_table;
+
+    /* 写入该通道的 PRDT 基址寄存器 */
+    bm_outl(host, bm_prdt_off(host), host->prd_phys);
+
+    printk("ATA: DMA: ch%d PRD table at phys=0x%08x (reg off=%d)\n",
+           bm_channel(host), host->prd_phys, bm_prdt_off(host));
+}
+
+/* ======================== SET FEATURES 传输模式 ======================== */
+
+/*
+ * ata_set_dma_mode - 向驱动器发送 SET FEATURES 启用 MWDMA2 传输模式
+ *
+ * 流程（ATA/ATAPI 标准）：
+ *   1. 选择驱动器（Device 寄存器）
+ *   2. 等待 BSY 清零
+ *   3. Features = 0x03 (Set Transfer Mode)
+ *   4. Sector Count = transfer mode value (MWDMA2 = 0x22)
+ *   5. 发送 SET FEATURES (0xEF) 命令
+ *   6. 等待完成，检查 ERR 位
+ *
+ * QEMU 的 PIIX3 接受任意 DMA 模式设置；部分真实硬件会拒绝不支持的模式。
+ * 失败时 dev->dma_ok 保持 0，驱动自动回退到 PIO。
+ */
+static int ata_set_dma_mode(struct ata_device *dev, unsigned char mode)
+{
+    struct ata_host *host = dev->host;
+    unsigned char status;
+    int ch_idx = bm_channel(host);
+
+    /* 选择驱动器 */
+    ata_outb(host, ATA_REG_DEVICE, dev->drive ? ATA_DEV_SLAVE : 0);
+    ata_400ns_delay(host);
+
+    status = ata_wait_bsy_clear(host);
+    if (status == 0xFF) {
+        printk("ATA: DMA mode: BSY stuck on ch%d drive%d\n",
+               ch_idx, dev->drive);
+        return -1;
+    }
+
+    /* Features = SET_TRANSFER_MODE */
+    ata_outb(host, ATA_REG_FEATURES, ATA_FEAT_SET_XFER);
+
+    /* Sector Count = 目标传输模式 */
+    ata_outb(host, ATA_REG_NSECTORS, mode);
+
+    /* LBA 寄存器清零 */
+    ata_outb(host, ATA_REG_LBA0, 0);
+    ata_outb(host, ATA_REG_LBA1, 0);
+    ata_outb(host, ATA_REG_LBA2, 0);
+
+    /* 发送 SET FEATURES */
+    ata_outb(host, ATA_REG_COMMAND, ATA_CMD_SET_FEATURES);
+    ata_400ns_delay(host);
+
+    /* 等待命令完成（BSY 清零） */
+    status = ata_wait_bsy_clear(host);
+    if (status == 0xFF) {
+        printk("ATA: DMA mode: timeout on ch%d drive%d\n",
+               ch_idx, dev->drive);
+        return -1;
+    }
+
+    if (status & ATA_STATUS_ERR) {
+        unsigned char err = ata_inb(host, ATA_REG_ERROR);
+        printk("ATA: DMA mode: rejected by drive ch%d drive%d "
+               "(mode=0x%02x status=%02x err=%02x)\n",
+               ch_idx, dev->drive, mode, status, err);
+        return -1;
+    }
+
+    printk("ATA: DMA mode: ch%d drive%d set to MWDMA2 (0x%02x) OK\n",
+           ch_idx, dev->drive, mode);
+    return 0;
+}
+
+/* ======================== Bus Master DMA 数据传输 ======================== */
+
+/*
+ * ata_dma_read_sectors - Bus Master DMA 方式读取扇区
+ *
+ * 与 PIO 相比，CPU 不参与数据搬运，DMA 控制器直接将磁盘数据写入内存。
+ *
+ * 流程：
+ *   1. 停止 DMA（CMD=0，清除 Status）
+ *   2. 构建 PRD 表：单条目覆盖整个传输
+ *   3. 将 PRD 表物理地址写入 BM_PRDT 寄存器
+ *   4. 设置 LBA 地址 + 扇区数
+ *   5. 发送 READ DMA (0xC8) 命令
+ *   6. 设置 BM Command = START
+ *   7. 轮询 BM Status，等待传输完成
+ *   8. 读主 Status 寄存器清除 INTRQ
+ *
+ * 缓冲区 buf 在 LulaOS 平坦映射下虚拟地址 = 物理地址，可直接写入 PRD。
+ */
+int ata_dma_read_sectors(struct ata_host *host, unsigned char drive,
+                         unsigned int lba, unsigned char count, void *buf)
+{
+    unsigned char status;
+    unsigned int total_bytes;
+    unsigned char sts;
+    unsigned int timeout;
+
+    if (!host->dma_ok || !count)
+        return -1;
+
+    total_bytes = (unsigned int)count * 512;
+
+    /*
+     * 单条目 PRD 最大 65536 字节（count=0 表示 64K）。
+     * 超过 128 个扇区（64KB）需要多条 PRD，这里只支持 ≤128 扇区。
+     */
+    if (total_bytes > 65536) {
+        printk("ATA: DMA: transfer too large (%u bytes, max 65536)\n",
+               total_bytes);
+        return -1;
+    }
+
+    /* 1. 停止任何残留 DMA 传输 */
+    bm_outb(host, bm_cmd_off(host), 0);
+
+    /* 2. 清除 Status 寄存器（写 1 清零对应位） */
+    bm_outb(host, bm_sts_off(host),
+            BM_STS_ERROR | BM_STS_INTR | BM_STS_ACTIVE);
+
+    /* 3. 构建 PRD 表：单条目 */
+    host->prd_table[0].base  = (unsigned int)(unsigned long)buf;
+    host->prd_table[0].count = (total_bytes == 65536)
+                               ? 0 : (unsigned short)total_bytes;
+    host->prd_table[0].flags = ATA_PRD_EOT;
+
+    /* 4. 写入 PRD 表物理地址 */
+    bm_outl(host, bm_prdt_off(host), host->prd_phys);
+
+    printk("ATA: DMA read: lba=%u count=%u buf=0x%08x bytes=%u prd=0x%08x\n",
+           lba, count, (unsigned int)(unsigned long)buf,
+           total_bytes, host->prd_phys);
+
+    /* 5. 选择驱动器 */
+    ata_outb(host, ATA_REG_DEVICE, drive ? ATA_DEV_SLAVE : 0);
+    ata_400ns_delay(host);
+
+    /* 6. 等待 BSY 清零 */
+    status = ata_wait_bsy_clear(host);
+    if (status == 0xFF) {
+        printk("ATA: DMA read: BSY stuck\n");
+        return -1;
+    }
+
+    /* 7. 设置扇区数和 LBA 地址 */
+    ata_outb(host, ATA_REG_NSECTORS, count);
+    ata_outb(host, ATA_REG_LBA0, (unsigned char)(lba & 0xFF));
+    ata_outb(host, ATA_REG_LBA1, (unsigned char)((lba >> 8) & 0xFF));
+    ata_outb(host, ATA_REG_LBA2, (unsigned char)((lba >> 16) & 0xFF));
+
+    /* Device 寄存器：LBA 位 + drive 选择 + LBA bits 24-27 */
+    ata_outb(host, ATA_REG_DEVICE,
+             ATA_DEV_LBA | (drive ? ATA_DEV_SLAVE : 0) |
+             ((lba >> 24) & 0x0F));
+
+    /* 8. 发送 READ DMA 命令（不中断模式由 BM 控制，无需 nIEN） */
+    ata_outb(host, ATA_REG_COMMAND, ATA_CMD_READ_DMA);
+    ata_400ns_delay(host);
+
+    /* 9. 启动 DMA：BM_CMD = START（bit0=1），方向为读（bit8=0） */
+    bm_outb(host, bm_cmd_off(host), BM_CMD_START);
+
+    /* 10. 轮询 BM Status，等待传输完成（Active=0 且 Intr=1 或 Error=1） */
+    timeout = 5000000;   /* DMA 比 PIO 快，给更多时间 */
+    while (timeout--) {
+        sts = bm_inb(host, bm_sts_off(host));
+
+        if (sts & BM_STS_ERROR) {
+            ata_status_err:
+            printk("ATA: DMA read: error (bm_sts=%02x ata_sts=%02x err=%02x)\n",
+                   bm_inb(host, bm_sts_off(host)),
+                   ata_inb(host, ATA_REG_STATUS),
+                   ata_inb(host, ATA_REG_ERROR));
+            bm_outb(host, bm_cmd_off(host), 0);
+            return -1;
+        }
+
+        /*
+         * 传输完成：Active 位清零 + Interrupt 位置位。
+         * 注意：仅检查 Active=0 不够，因为传输开始前 Active 也是 0。
+         * 必须等 INTR=1 才能确认传输结束。
+         */
+        if ((sts & BM_STS_ACTIVE) == 0 && (sts & BM_STS_INTR))
+            break;
+    }
+
+    if (timeout == 0) {
+        printk("ATA: DMA read: timeout (bm_sts=%02x ata_sts=%02x)\n",
+               bm_inb(host, bm_sts_off(host)),
+               ata_ctrl_inb(host));
+        bm_outb(host, bm_cmd_off(host), 0);
+        return -1;
+    }
+
+    /* 11. 读主 Status 寄存器清除 INTRQ（ATA 协议要求） */
+    status = ata_inb(host, ATA_REG_STATUS);
+    if (status & ATA_STATUS_ERR)
+        goto ata_status_err;
+
+    /* 12. 清除 BM Status INTR 位（写 1 清零） */
+    bm_outb(host, bm_sts_off(host), BM_STS_INTR);
+
+    /* 13. 停止 DMA */
+    bm_outb(host, bm_cmd_off(host), 0);
+
+    printk("ATA: DMA read: OK (final ata_sts=%02x bm_sts=%02x)\n",
+           status, bm_inb(host, bm_sts_off(host)));
+    return 0;
+}
+
+/* ======================== Bus Master DMA 写 ======================== */
+
+/*
+ * ata_dma_write_sectors - Bus Master DMA 方式写入扇区
+ *
+ * 与 DMA 读相比，写方向的差异：
+ *   - BM Command bit3（BM_CMD_WRITE）= 1：方向 Memory → Disk
+ *   - ATA 命令使用 WRITE DMA（0xCA）
+ *   - DMA 传输完成后必须追加 CACHE FLUSH（0xE7），确保数据写入盘片
+ *
+ * 流程：
+ *   1. 停止 DMA（CMD=0，清除 Status）
+ *   2. 构建 PRD 表：指向 buf（数据来源）
+ *   3. 写 PRDT 基址
+ *   4. 设置 LBA 地址 + 扇区数
+ *   5. 发送 WRITE DMA (0xCA) 命令
+ *   6. 启动 DMA：CMD = START | WRITE
+ *   7. 轮询 BM Status 等待完成
+ *   8. CACHE FLUSH
+ */
+int ata_dma_write_sectors(struct ata_host *host, unsigned char drive,
+                          unsigned int lba, unsigned char count,
+                          const void *buf)
+{
+    unsigned char status;
+    unsigned int total_bytes;
+    unsigned char sts;
+    unsigned int timeout;
+
+    if (!host->dma_ok || !count)
+        return -1;
+
+    total_bytes = (unsigned int)count * 512;
+
+    if (total_bytes > 65536) {
+        printk("ATA: DMA write: transfer too large (%u bytes, max 65536)\n",
+               total_bytes);
+        return -1;
+    }
+
+    /* 1. 停止任何残留 DMA */
+    bm_outb(host, bm_cmd_off(host), 0);
+
+    /* 2. 清除 Status 寄存器 */
+    bm_outb(host, bm_sts_off(host),
+            BM_STS_ERROR | BM_STS_INTR | BM_STS_ACTIVE);
+
+    /*
+     * 3. 构建 PRD 表：buf 是数据来源，DMA 控制器从内存读 buf 写入磁盘。
+     *    const void * 转 unsigned int 在 x86-32 平坦映射下安全。
+     */
+    host->prd_table[0].base  = (unsigned int)(unsigned long)buf;
+    host->prd_table[0].count = (total_bytes == 65536)
+                               ? 0 : (unsigned short)total_bytes;
+    host->prd_table[0].flags = ATA_PRD_EOT;
+
+    bm_outl(host, bm_prdt_off(host), host->prd_phys);
+
+    printk("ATA: DMA write: lba=%u count=%u buf=0x%08x bytes=%u\n",
+           lba, count, (unsigned int)(unsigned long)buf, total_bytes);
+
+    /* 4. 选择驱动器 */
+    ata_outb(host, ATA_REG_DEVICE, drive ? ATA_DEV_SLAVE : 0);
+    ata_400ns_delay(host);
+
+    /* 5. 等待 BSY 清零 */
+    status = ata_wait_bsy_clear(host);
+    if (status == 0xFF) {
+        printk("ATA: DMA write: BSY stuck\n");
+        return -1;
+    }
+
+    /* 6. 设置扇区数和 LBA 地址 */
+    ata_outb(host, ATA_REG_NSECTORS, count);
+    ata_outb(host, ATA_REG_LBA0, (unsigned char)(lba & 0xFF));
+    ata_outb(host, ATA_REG_LBA1, (unsigned char)((lba >> 8) & 0xFF));
+    ata_outb(host, ATA_REG_LBA2, (unsigned char)((lba >> 16) & 0xFF));
+
+    ata_outb(host, ATA_REG_DEVICE,
+             ATA_DEV_LBA | (drive ? ATA_DEV_SLAVE : 0) |
+             ((lba >> 24) & 0x0F));
+
+    /* 7. 发送 WRITE DMA 命令 */
+    ata_outb(host, ATA_REG_COMMAND, ATA_CMD_WRITE_DMA);
+    ata_400ns_delay(host);
+
+    /*
+     * 8. 启动 DMA：START(bit0=1) + WRITE(bit3=1)
+     *
+     * BM_CMD_WRITE = 1 表示 Memory → Disk（写方向）。
+     * 不设置此位则方向相反，DMA 控制器会把磁盘数据读到 buf。
+     */
+    bm_outb(host, bm_cmd_off(host), BM_CMD_START | BM_CMD_WRITE);
+
+    /* 9. 轮询等待完成 */
+    timeout = 5000000;
+    while (timeout--) {
+        sts = bm_inb(host, bm_sts_off(host));
+
+        if (sts & BM_STS_ERROR) {
+            printk("ATA: DMA write: error (bm_sts=%02x ata_sts=%02x err=%02x)\n",
+                   bm_inb(host, bm_sts_off(host)),
+                   ata_inb(host, ATA_REG_STATUS),
+                   ata_inb(host, ATA_REG_ERROR));
+            bm_outb(host, bm_cmd_off(host), 0);
+            return -1;
+        }
+
+        if ((sts & BM_STS_ACTIVE) == 0 && (sts & BM_STS_INTR))
+            break;
+    }
+
+    if (timeout == 0) {
+        printk("ATA: DMA write: timeout (bm_sts=%02x ata_sts=%02x)\n",
+               bm_inb(host, bm_sts_off(host)),
+               ata_ctrl_inb(host));
+        bm_outb(host, bm_cmd_off(host), 0);
+        return -1;
+    }
+
+    /* 10. 读主 Status 寄存器清除 INTRQ */
+    status = ata_inb(host, ATA_REG_STATUS);
+    if (status & ATA_STATUS_ERR) {
+        printk("ATA: DMA write: ata error (status=%02x err=%02x)\n",
+               status, ata_inb(host, ATA_REG_ERROR));
+        bm_outb(host, bm_cmd_off(host), 0);
+        return -1;
+    }
+
+    /* 11. 清除 BM Status INTR 位，停止 DMA */
+    bm_outb(host, bm_sts_off(host), BM_STS_INTR);
+    bm_outb(host, bm_cmd_off(host), 0);
+
+    /*
+     * 12. CACHE FLUSH (0xE7)
+     *
+     * DMA 写完成后，ATA 标准要求主机发送 CACHE FLUSH，
+     * 等待驱动器将写缓存中的数据实际写入介质。
+     * 不刷新则断电/复位可能丢失数据。
+     */
+    ata_outb(host, ATA_REG_COMMAND, ATA_CMD_CACHE_FLUSH);
+    status = ata_wait_bsy_clear(host);
+    if (status == 0xFF || (status & ATA_STATUS_ERR)) {
+        printk("ATA: DMA write: cache flush failed (status=%02x)\n", status);
+        return -1;
+    }
+
+    printk("ATA: DMA write: OK (final ata_sts=%02x bm_sts=%02x)\n",
+           status, bm_inb(host, bm_sts_off(host)));
+    return 0;
+}
+
 /* ======================== PCI 驱动注册 ======================== */
 
 /*
@@ -522,6 +972,7 @@ static int ata_pci_probe(struct pci_dev *pdev,
                          const struct pci_device_id *id)
 {
     int ch, drive;
+    unsigned int bar4_raw;
 
     (void)id;
 
@@ -537,22 +988,57 @@ static int ata_pci_probe(struct pci_dev *pdev,
            pdev->bus, pdev->devfn >> 3, pdev->devfn & 7,
            pdev->vendor, pdev->device);
 
-    /* 使能 I/O 空间响应 */
+    /*
+     * 使能 I/O 空间 + Bus Master(总线控制)
+     *
+     * Bus Master DMA 需要 PCI Command 寄存器 bit2=1（PCI_COMMAND_MASTER）。
+     * 不使能则 BM Command 寄存器的 START 位无效。
+     */
     pci_enable_device(pdev);
+    {
+        unsigned int cmd;
+        cmd = pci_config_read32(pdev->bus, pdev->devfn, PCI_COMMAND);
+        cmd |= PCI_COMMAND_MASTER;
+        pci_config_write32(pdev->bus, pdev->devfn, PCI_COMMAND, cmd);
+        printk("ATA: PCI command register = 0x%04x (Bus Master enabled)\n",
+               cmd & 0xFFFF);
+    }
+
+    /*
+     * 读取 BAR4：Bus Master IDE I/O 基址
+     *
+     * PIIX3 IDE 的 BAR4（PCI config offset 0x20）存放 BM I/O 端口基址。
+     * bit0=1 表示 I/O 空间，bit1=0（IDE BM 不使用 mem 空间）。
+     * 实际基址 = bar4 & 0xFFFC（去掉低 2 位）。
+     */
+    bar4_raw = pci_config_read32(pdev->bus, pdev->devfn, ATA_PCI_BM_BAR);
+    printk("ATA: BAR4 (IDE BM) raw = 0x%08x\n", bar4_raw);
 
     /* 初始化 Primary 通道 */
-    ata_hosts[0].pdev     = pdev;
-    ata_hosts[0].io_base  = ATA_PRIMARY_IO;
+    ata_hosts[0].pdev      = pdev;
+    ata_hosts[0].io_base   = ATA_PRIMARY_IO;
     ata_hosts[0].ctrl_base = ATA_PRIMARY_CTRL;
-    ata_hosts[0].irq      = ATA_PRIMARY_IRQ;
-    ata_hosts[0].present  = 0;
+    ata_hosts[0].irq       = ATA_PRIMARY_IRQ;
+    ata_hosts[0].present   = 0;
+    ata_hosts[0].bm_base   = (unsigned short)(bar4_raw & 0xFFFC);
+    ata_hosts[0].dma_ok    = (bar4_raw & 0x01) && (ata_hosts[0].bm_base != 0);
+    ata_hosts[0].prd_table = NULL;
+    ata_hosts[0].prd_phys  = 0;
 
     /* 初始化 Secondary 通道 */
-    ata_hosts[1].pdev     = pdev;
-    ata_hosts[1].io_base  = ATA_SECONDARY_IO;
+    ata_hosts[1].pdev      = pdev;
+    ata_hosts[1].io_base   = ATA_SECONDARY_IO;
     ata_hosts[1].ctrl_base = ATA_SECONDARY_CTRL;
-    ata_hosts[1].irq      = ATA_SECONDARY_IRQ;
-    ata_hosts[1].present  = 0;
+    ata_hosts[1].irq       = ATA_SECONDARY_IRQ;
+    ata_hosts[1].present   = 0;
+    ata_hosts[1].bm_base   = (unsigned short)(bar4_raw & 0xFFFC);
+    ata_hosts[1].dma_ok    = (bar4_raw & 0x01) && (ata_hosts[1].bm_base != 0);
+    ata_hosts[1].prd_table = NULL;
+    ata_hosts[1].prd_phys  = 0;
+
+    /* DMA 状态总览 */
+    printk("ATA: Bus Master IDE base = 0x%04x, dma_ok=%d\n",
+           ata_hosts[0].bm_base, ata_hosts[0].dma_ok);
 
     /* 清零设备表 */
     {
@@ -562,24 +1048,52 @@ static int ata_pci_probe(struct pci_dev *pdev,
             p[i] = 0;
     }
 
+    /* 初始化 DMA：为每个通道分配 PRD 表（BAR4 有效时） */
+    ata_dma_init_channel(&ata_hosts[0]);
+    ata_dma_init_channel(&ata_hosts[1]);
+
     /* 枚举所有通道的所有驱动器 */
     for (ch = 0; ch < 2; ch++) {
         for (drive = 0; drive < 2; drive++) {
             ata_identify(&ata_hosts[ch], (unsigned char)drive,
                          &ata_devices[ch][drive]);
+
+            /*
+             * 驱动器支持 DMA 时，发送 SET FEATURES 启用 MWDMA2。
+             * 失败则 dev->dma_ok 保持 0，MBR 测试自动回退到 PIO。
+             */
+            if (ata_devices[ch][drive].dma_ok) {
+                if (ata_set_dma_mode(&ata_devices[ch][drive],
+                                     ATA_XFER_MWDMA2) != 0) {
+                    printk("ATA: DMA mode rejected on ch%d drive%d, "
+                           "falling back to PIO\n", ch, drive);
+                    ata_devices[ch][drive].dma_ok = 0;
+                }
+            }
         }
     }
 
     /* 验证测试：读取 MBR（LBA 0） */
-    printk("ATA: scan complete. ch0-drive0 present=%d\n", ata_devices[0][0].present);
+    printk("ATA: scan complete. ch0-drive0 present=%d dma=%d\n",
+           ata_devices[0][0].present, ata_devices[0][0].dma_ok);
     if (ata_devices[0][0].present) {
         unsigned char mbr[512];
         unsigned short sig;
+        int ret;
 
-        printk("ATA: attempting MBR read (LBA 0)...\n");
-        if (ata_pio_read_sectors(&ata_hosts[0], 0, 0, 1, mbr) == 0) {
+        printk("ATA: attempting MBR read (LBA 0, mode=%s)...\n",
+               ata_devices[0][0].dma_ok ? "DMA" : "PIO");
+
+        if (ata_devices[0][0].dma_ok) {
+            ret = ata_dma_read_sectors(&ata_hosts[0], 0, 0, 1, mbr);
+        } else {
+            ret = ata_pio_read_sectors(&ata_hosts[0], 0, 0, 1, mbr);
+        }
+
+        if (ret == 0) {
             sig = (unsigned short)(mbr[511] << 8 | mbr[510]);
-            printk("ATA: MBR read OK, signature=0x%04X\n", sig);
+            printk("ATA: MBR read OK [%s], signature=0x%04X\n",
+                   ata_devices[0][0].dma_ok ? "DMA" : "PIO", sig);
             printk("ATA: MBR first 16 bytes:");
             {
                 int i;
@@ -587,8 +1101,21 @@ static int ata_pci_probe(struct pci_dev *pdev,
                     printk(" %02x", mbr[i]);
             }
             printk("\n");
+
+            /* DMA 模式下追加一次 PIO 对比，验证两者一致性 */
+            if (ata_devices[0][0].dma_ok) {
+                unsigned char mbr_pio[512];
+                if (ata_pio_read_sectors(&ata_hosts[0], 0, 0, 1, mbr_pio) == 0) {
+                    unsigned int diff = 0, i;
+                    for (i = 0; i < 512; i++)
+                        if (mbr[i] != mbr_pio[i]) diff++;
+                    printk("ATA: DMA vs PIO consistency check: %s (%u bytes differ)\n",
+                           diff == 0 ? "MATCH" : "MISMATCH", diff);
+                }
+            }
         } else {
-            printk("ATA: MBR read FAILED\n");
+            printk("ATA: MBR read FAILED [%s]\n",
+                   ata_devices[0][0].dma_ok ? "DMA" : "PIO");
         }
     }
 
