@@ -30,6 +30,7 @@
 #include <stddef.h>
 #include <mm/slab.h>
 #include <interrupts/interrupts.h>
+#include <arch/x86/system.h>
 
 /* ======================== 全局状态 ======================== */
 
@@ -794,11 +795,34 @@ int ata_dma_read_sectors(struct ata_host *host, unsigned char drive,
     ata_outb(host, ATA_REG_COMMAND, ATA_CMD_READ_DMA);
     ata_400ns_delay(host);
 
-    /* 9. 启动 DMA：BM_CMD = START（bit0=1），方向为读（bit8=0） */
+    /*
+     * 9. 睡眠等待 DMA 完成（IRQ 处理函数会唤醒我们）
+     *
+     * 【关键】必须在启动 DMA 之前完成等待队列注册和状态设置，
+     * 否则存在竞态条件：
+     *   错误顺序:  start_DMA → [IRQ 触发, wake_up 空队列] → sleep_on → 永久挂死
+     *   正确顺序:  add_wait_queue + state=SLEEP → start_DMA → schedule()
+     *
+     * 关中断保护 [state 设置]，确保 IRQ 不会在状态写入前触发 wake_up。
+     */
+    {
+        wait_queue_t wait_entry;
+        unsigned long irq_flags;
+
+        init_waitqueue_entry(&wait_entry, current);
+        add_wait_queue(&host->wait_queue, &wait_entry);
+
+        /* 关中断：保护 state 设置不被 IRQ 打断 */
+        local_irq_save(irq_flags);
+        current->state = TASK_UNINTERRUPTIBLE;
+        local_irq_restore(irq_flags);
+    }
+
+    /* 10. 启动 DMA：BM_CMD = START（bit0=1），方向为读（bit8=0） */
     bm_outb(host, bm_cmd_off(host), BM_CMD_START);
 
-    /* 10. 睡眠等待 DMA 完成（IRQ 处理函数会唤醒我们） */
-    sleep_on(&host->wait_queue);
+    /* 11. 让出 CPU，等 IRQ 唤醒（若 IRQ 已触发，wake_up 已将 state 改回 RUNNING，schedule 直接返回） */
+    schedule();
 
     /* 被唤醒后检查状态 */
     sts = bm_inb(host, bm_sts_off(host));
@@ -918,15 +942,32 @@ int ata_dma_write_sectors(struct ata_host *host, unsigned char drive,
     ata_400ns_delay(host);
 
     /*
-     * 8. 启动 DMA：START(bit0=1) + WRITE(bit3=1)
+     * 8. 睡眠等待 DMA 完成（IRQ 处理函数会唤醒我们）
+     *
+     * 同 DMA 读，必须在启动 DMA 前完成等待队列注册，避免竞态。
+     */
+    {
+        wait_queue_t wait_entry;
+        unsigned long irq_flags;
+
+        init_waitqueue_entry(&wait_entry, current);
+        add_wait_queue(&host->wait_queue, &wait_entry);
+
+        local_irq_save(irq_flags);
+        current->state = TASK_UNINTERRUPTIBLE;
+        local_irq_restore(irq_flags);
+    }
+
+    /*
+     * 9. 启动 DMA：START(bit0=1) + WRITE(bit3=1)
      *
      * BM_CMD_WRITE = 1 表示 Memory → Disk（写方向）。
      * 不设置此位则方向相反，DMA 控制器会把磁盘数据读到 buf。
      */
     bm_outb(host, bm_cmd_off(host), BM_CMD_START | BM_CMD_WRITE);
 
-    /* 9. 睡眠等待 DMA 完成（IRQ 处理函数会唤醒我们） */
-    sleep_on(&host->wait_queue);
+    /* 10. 让出 CPU，等 IRQ 唤醒 */
+    schedule();
 
     /* 被唤醒后检查状态 */
     sts = bm_inb(host, bm_sts_off(host));

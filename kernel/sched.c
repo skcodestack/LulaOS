@@ -156,6 +156,10 @@ void schedule(void)
      * 若 prev 时间片耗尽且仍可运行，移入队列尾部，
      * 给它新的时间片，下一轮重新竞争 CPU
      *
+     * 若 prev 不可运行（TASK_UNINTERRUPTIBLE 等），从运行队列移除。
+     * 调度器只扫描队列中的任务，不移除则睡眠任务永远被跳过。
+     * wake_up 会将其重新加入队列，保证唤醒后被调度器发现。
+     *
      * 注意：idle 任务的 counter 永远是 MAX_TIMESLICE（scheduler_tick
      * 对 idle 直接 return，不递减），因此这个条件对 idle 永远为假，
      * 不会触发 list_del/list_add_tail，链表不会被破坏。
@@ -164,6 +168,9 @@ void schedule(void)
         prev->counter = prev->timeslice;
         list_del(&prev->run_list);
         list_add_tail(&prev->run_list, &rq->queue);
+    } else if (prev->state != TASK_RUNNING) {
+        /* 任务已睡眠/停止，从运行队列移除 */
+        del_task_from_runqueue(prev);
     }
 
     /* 选择下一个任务：扫描 runqueue，取 counter 最大者 */
