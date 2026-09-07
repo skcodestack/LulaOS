@@ -19,6 +19,7 @@
 #include <arch/x86/acpi.h>
 #include <pci/pci.h>
 #include <ata/ata.h>
+#include <sata/sata.h>
 #include <usb/usb.h>
 #include <usb/uhci.h>
 #include <drm/drm_core.h>
@@ -50,6 +51,9 @@ static int thread_init_func(void *arg){
 
     /* ATA 磁盘驱动初始化（PCI 驱动注册 + IDENTIFY 探测） */
     ata_init(); 
+
+    /* SATA/AHCI 子系统初始化（匹配 class 0x010601 AHCI 控制器，扫描端口） */
+    sata_init();
 
     /* 初始化软中断子系统（kmem_cache_init 已完成，kmalloc 可用）*/
     softirq_init();
