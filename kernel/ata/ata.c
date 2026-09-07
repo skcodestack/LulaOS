@@ -29,6 +29,7 @@
 #include <libs/string.h>
 #include <stddef.h>
 #include <mm/slab.h>
+#include <interrupts/interrupts.h>
 
 /* ======================== 全局状态 ======================== */
 
@@ -584,6 +585,56 @@ static void ata_dma_init_channel(struct ata_host *host)
 
     printk("ATA: DMA: ch%d PRD table at phys=0x%08x (reg off=%d)\n",
            bm_channel(host), host->prd_phys, bm_prdt_off(host));
+
+    /* 初始化 DMA 完成等待队列 */
+    init_waitqueue_head(&host->wait_queue);
+
+    /* 注册 IRQ 处理函数（IRQ 转中断向量：vector = FIRST_DEVICE_VECTOR + irq） */
+    {
+        unsigned int vector = FIRST_DEVICE_VECTOR + host->irq;
+        int ret = request_irq(vector, ata_irq_handler, "ata_dma", host);
+        if (ret == 0)
+            printk("ATA: DMA: IRQ%d registered (vector=%#x)\n", host->irq, vector);
+        else {
+            printk("ATA: DMA: IRQ%d registration FAILED (ret=%d)\n", host->irq, ret);
+            host->dma_ok = 0;  /* 中断注册失败，回退为 PIO */
+        }
+    }
+}
+
+/* ======================== ATA 中断处理函数 ======================== */
+
+/*
+ * ata_irq_handler - ATA DMA 完成中断处理
+ *
+ * 当 DMA 传输完成时，IDE 控制器触发 IRQ14（主通道）或 IRQ15（次通道）。
+ * 本函数：
+ *   1. 检查 BM Status 的 INTR 位，确认是本通道的 DMA 完成中断
+ *   2. 唤醒等待在该通道 wait_queue 上的进程
+ *   3. 中断处理函数不直接清理 BM 状态，由被唤醒的进程完成
+ *
+ * 参数：
+ *   irq: ISA IRQ 号（14 或 15）
+ *   dev_id: 指向 ata_host 结构（注册时传入）
+ *   regs: 中断时的寄存器快照（本函数不使用）
+ */
+static void ata_irq_handler(int irq, void *dev_id, struct pt_regs *regs)
+{
+    struct ata_host *host = (struct ata_host *)dev_id;
+    unsigned char bm_sts;
+
+    /* 读取 BM Status，检查 INTR 位 */
+    bm_sts = bm_inb(host, bm_sts_off(host));
+
+    /*
+     * BM_STS_INTR (bit 2) = 1 表示 DMA 传输完成并产生了中断。
+     * 如果不是我们的中断（可能是共享 IRQ 或其他设备），直接返回。
+     */
+    if (!(bm_sts & BM_STS_INTR))
+        return;
+
+    /* 唤醒等待 DMA 完成的进程 */
+    wake_up(&host->wait_queue);
 }
 
 /* ======================== SET FEATURES 传输模式 ======================== */
@@ -680,7 +731,6 @@ int ata_dma_read_sectors(struct ata_host *host, unsigned char drive,
     unsigned char status;
     unsigned int total_bytes;
     unsigned char sts;
-    unsigned int timeout;
 
     if (!host->dma_ok || !count)
         return -1;
@@ -746,42 +796,29 @@ int ata_dma_read_sectors(struct ata_host *host, unsigned char drive,
     /* 9. 启动 DMA：BM_CMD = START（bit0=1），方向为读（bit8=0） */
     bm_outb(host, bm_cmd_off(host), BM_CMD_START);
 
-    /* 10. 轮询 BM Status，等待传输完成（Active=0 且 Intr=1 或 Error=1） */
-    timeout = 5000000;   /* DMA 比 PIO 快，给更多时间 */
-    while (timeout--) {
-        sts = bm_inb(host, bm_sts_off(host));
+    /* 10. 睡眠等待 DMA 完成（IRQ 处理函数会唤醒我们） */
+    sleep_on(&host->wait_queue);
 
-        if (sts & BM_STS_ERROR) {
-            ata_status_err:
-            printk("ATA: DMA read: error (bm_sts=%02x ata_sts=%02x err=%02x)\n",
-                   bm_inb(host, bm_sts_off(host)),
-                   ata_inb(host, ATA_REG_STATUS),
-                   ata_inb(host, ATA_REG_ERROR));
-            bm_outb(host, bm_cmd_off(host), 0);
-            return -1;
-        }
+    /* 被唤醒后检查状态 */
+    sts = bm_inb(host, bm_sts_off(host));
 
-        /*
-         * 传输完成：Active 位清零 + Interrupt 位置位。
-         * 注意：仅检查 Active=0 不够，因为传输开始前 Active 也是 0。
-         * 必须等 INTR=1 才能确认传输结束。
-         */
-        if ((sts & BM_STS_ACTIVE) == 0 && (sts & BM_STS_INTR))
-            break;
-    }
-
-    if (timeout == 0) {
-        printk("ATA: DMA read: timeout (bm_sts=%02x ata_sts=%02x)\n",
-               bm_inb(host, bm_sts_off(host)),
-               ata_ctrl_inb(host));
+    if (sts & BM_STS_ERROR) {
+        printk("ATA: DMA read: error (bm_sts=%02x ata_sts=%02x err=%02x)\n",
+               sts,
+               ata_inb(host, ATA_REG_STATUS),
+               ata_inb(host, ATA_REG_ERROR));
         bm_outb(host, bm_cmd_off(host), 0);
         return -1;
     }
 
     /* 11. 读主 Status 寄存器清除 INTRQ（ATA 协议要求） */
     status = ata_inb(host, ATA_REG_STATUS);
-    if (status & ATA_STATUS_ERR)
-        goto ata_status_err;
+    if (status & ATA_STATUS_ERR) {
+        printk("ATA: DMA read: ATA error (status=%02x err=%02x)\n",
+               status, ata_inb(host, ATA_REG_ERROR));
+        bm_outb(host, bm_cmd_off(host), 0);
+        return -1;
+    }
 
     /* 12. 清除 BM Status INTR 位（写 1 清零） */
     bm_outb(host, bm_sts_off(host), BM_STS_INTR);
@@ -821,7 +858,6 @@ int ata_dma_write_sectors(struct ata_host *host, unsigned char drive,
     unsigned char status;
     unsigned int total_bytes;
     unsigned char sts;
-    unsigned int timeout;
 
     if (!host->dma_ok || !count)
         return -1;
@@ -888,28 +924,17 @@ int ata_dma_write_sectors(struct ata_host *host, unsigned char drive,
      */
     bm_outb(host, bm_cmd_off(host), BM_CMD_START | BM_CMD_WRITE);
 
-    /* 9. 轮询等待完成 */
-    timeout = 5000000;
-    while (timeout--) {
-        sts = bm_inb(host, bm_sts_off(host));
+    /* 9. 睡眠等待 DMA 完成（IRQ 处理函数会唤醒我们） */
+    sleep_on(&host->wait_queue);
 
-        if (sts & BM_STS_ERROR) {
-            printk("ATA: DMA write: error (bm_sts=%02x ata_sts=%02x err=%02x)\n",
-                   bm_inb(host, bm_sts_off(host)),
-                   ata_inb(host, ATA_REG_STATUS),
-                   ata_inb(host, ATA_REG_ERROR));
-            bm_outb(host, bm_cmd_off(host), 0);
-            return -1;
-        }
+    /* 被唤醒后检查状态 */
+    sts = bm_inb(host, bm_sts_off(host));
 
-        if ((sts & BM_STS_ACTIVE) == 0 && (sts & BM_STS_INTR))
-            break;
-    }
-
-    if (timeout == 0) {
-        printk("ATA: DMA write: timeout (bm_sts=%02x ata_sts=%02x)\n",
-               bm_inb(host, bm_sts_off(host)),
-               ata_ctrl_inb(host));
+    if (sts & BM_STS_ERROR) {
+        printk("ATA: DMA write: error (bm_sts=%02x ata_sts=%02x err=%02x)\n",
+               sts,
+               ata_inb(host, ATA_REG_STATUS),
+               ata_inb(host, ATA_REG_ERROR));
         bm_outb(host, bm_cmd_off(host), 0);
         return -1;
     }

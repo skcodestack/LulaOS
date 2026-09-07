@@ -13,6 +13,7 @@
 #define __ATA_H__
 
 #include <pci/pci.h>
+#include <wait.h>
 
 /* ======================== ATA I/O 寄存器偏移 ======================== */
 /* 相对于 Command Block I/O 基址 */
@@ -200,6 +201,7 @@ struct ata_host {
     unsigned char    dma_ok;        /* BM 硬件可用（BAR4 有效 + Bus Master 已使能） */
     struct ata_prd  *prd_table;     /* PRD 表虚拟地址（每个通道一份，4K 对齐） */
     unsigned int     prd_phys;      /* PRD 表物理地址 */
+    wait_queue_head_t wait_queue;   /* DMA 完成等待队列 */
 };
 
 /* ======================== ata_device 结构 ======================== */
