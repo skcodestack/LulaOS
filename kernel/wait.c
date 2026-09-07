@@ -1,8 +1,5 @@
 /*
- * wait.c - 等待队列核心实现
- *
- * sleep_on: 当前进程加入等待队列并睡眠，让出 CPU
- * wake_up:  唤醒等待队列中的所有进程
+ * wait.c - 等待队列核心实现（对齐 Linux 2.6.20 kernel/sched.c sleep_on + wait.c wake_up）
  */
 
 #include <wait.h>
@@ -13,82 +10,74 @@
 /*
  * wake_up - 唤醒等待队列中的所有进程
  *
- * 遍历等待队列，对每个进程：
- *   1. 将状态改为 TASK_RUNNING
+ * 持 q->lock 遍历等待队列，对每个 entry 调 wake_up_process()：
+ *   1. state → TASK_RUNNING
  *   2. 重新加入运行队列（schedule 只扫描 rq->queue，不加入则永远不会被调度）
- *   3. 从等待队列移除
  *
- * 【关键】仅修改 state 是不够的！sleep_on/schedule 路径将任务从 runqueue
- * 移除（TASK_UNINTERRUPTIBLE 的任务不在 run queue 中），如果 wake_up
- * 不重新加入，调度器扫描不到该任务，任务会永久睡眠。
+ * 【与旧版的区别】不再代睡眠者从等待队列出队。
+ * 出队由被唤醒进程醒来后自己完成（sleep_on 的 __remove_wait_queue /
+ * finish_wait），参考 Linux wake_up → try_to_wake_up 的职责划分：
+ *   wake_up 只改状态 + 入运行队列，不动等待队列。
+ *
+ * 好处：避免硬中断上下文去操作睡眠者栈上的 wait entry，
+ * 若睡眠者尚未真正 schedule（还在运行），出队操作可能与其自身的
+ * finish_wait 竞争同一链表节点。
  */
 void wake_up(wait_queue_head_t *q)
 {
+    unsigned long flags;
     struct list_head *pos, *tmp;
     wait_queue_t *entry;
+
+    spin_lock_irqsave(&q->lock, flags);
 
     list_for_each_safe(pos, tmp, &q->task_list) {
         entry = list_entry(pos, wait_queue_t, list);
 
-        /* 将进程状态改为可运行 */
-        entry->task->state = TASK_RUNNING;
-
-        /*
-         * 重新加入运行队列。
-         * schedule() 只扫描 rq->queue 链表挑选下一个任务，
-         * 不加入则永远不会被调度器选中。
-         */
-        add_task_to_runqueue(entry->task);
-
-        /* 从等待队列移除 */
-        list_del(&entry->list);
+        /* 置 RUNNING + 加入运行队列（内部有防重复入队检查） */
+        wake_up_process(entry->task);
     }
+
+    spin_unlock_irqrestore(&q->lock, flags);
 }
 
 /*
  * sleep_on - 当前进程睡眠并加入等待队列
  *
- * 流程：
- *   1. 关中断，防止 IRQ 在 add_wait_queue 与 schedule 之间触发
- *   2. 创建等待队列条目，指向当前进程
- *   3. 加入等待队列
- *   4. 设置当前进程状态为 TASK_UNINTERRUPTIBLE（不可中断睡眠）
- *   5. 调用 schedule() 让出 CPU（内部会开中断）
- *   6. 被唤醒后返回
+ * 参考 Linux 2.6.20 kernel/sched.c sleep_on() 原版结构：
+ *   1. 设置 state = TASK_UNINTERRUPTIBLE
+ *   2. 持 q->lock 入队
+ *   3. schedule() 让出 CPU
+ *   4. 醒来后自己持 q->lock 出队
  *
- * 【关键】必须先设置 state 再开中断/启动 DMA，否则存在竞态：
- *   错误顺序:  start_DMA → [IRQ 触发, wake_up 找不到 entry] → sleep_on → 永久睡眠
- *   正确顺序:  add_wait_queue + state=SLEEPING → start_DMA → schedule()
+ * 【适用限制】与 Linux sleep_on 同样的固有限制：
+ * 若事件在进入本函数之前已经触发，唤醒会丢失（wake_up 看不到还没入队的我们）。
+ * 因此只适用于「事件源由调用方启动」的场景（先 sleep_on 准备，后启动事件源），
+ * 或容忍丢失的事件。
  *
- * 关中断保护 [add_wait_queue + state 设置] 这段临界区，
- * 确保 IRQ 触发时 wake_up 一定能找到 entry 并唤醒。
+ * 需要「入队与睡眠之间插入动作」的驱动（如 ATA DMA 先入队再写 BM_CMD_START）
+ * 请改用 prepare_to_wait / schedule / finish_wait 三段式。
  */
 void sleep_on(wait_queue_head_t *q)
 {
-    wait_queue_t entry;
+    wait_queue_t wait;
     unsigned long flags;
 
-    /* 关中断：保护 [加入队列 + 设置状态] 不被 IRQ 打断 */
-    local_irq_save(flags);
+    init_waitqueue_entry(&wait, current);
 
-    /* 初始化等待队列条目 */
-    init_waitqueue_entry(&entry, current);
-
-    /* 加入等待队列（必须在设置 state 之前，wake_up 才能找到我们） */
-    add_wait_queue(q, &entry);
-
-    /* 设置当前进程为不可中断睡眠状态 */
+    /* 1. 先设睡眠状态 */
     current->state = TASK_UNINTERRUPTIBLE;
 
-    /*
-     * 开中断，允许 IRQ 触发。
-     * 若 IRQ 已经触发（在关中断期间排队），开中断后立即交付，
-     * wake_up 会将 state 改为 TASK_RUNNING，schedule() 不会真正睡眠。
-     */
-    local_irq_restore(flags);
+    /* 2. 持锁入队：与 wake_up 的遍历互斥 */
+    spin_lock_irqsave(&q->lock, flags);
+    __add_wait_queue(q, &wait);
+    spin_unlock_irqrestore(&q->lock, flags);
 
-    /* 让出 CPU，调度器选择其他进程运行 */
+    /* 3. 让出 CPU；schedule() 检测 state != RUNNING 会将本任务摘出运行队列 */
     schedule();
 
-    /* 被唤醒后执行到这里，entry 已被 wake_up 从队列移除 */
+    /* 4. 醒来后自己出队（wake_up 不代劳） */
+    spin_lock_irqsave(&q->lock, flags);
+    __remove_wait_queue(q, &wait);
+    spin_unlock_irqrestore(&q->lock, flags);
 }

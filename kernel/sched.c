@@ -169,8 +169,15 @@ void schedule(void)
         list_del(&prev->run_list);
         list_add_tail(&prev->run_list, &rq->queue);
     } else if (prev->state != TASK_RUNNING) {
-        /* 任务已睡眠/停止，从运行队列移除 */
-        del_task_from_runqueue(prev);
+        /*
+         * 任务已睡眠/退出，从运行队列摘除（若尚未摘除）。
+         *
+         * do_exit()/interruptible_sleep() 已自行摘除（run_list 重置为自指），
+         * 此处再摘会多减 nr_running，故先检查自指。
+         * sleep_on/prepare_to_wait 路径不预先摘除，由这里统一摘。
+         */
+        if (prev->run_list.next != &prev->run_list)
+            del_task_from_runqueue(prev);
     }
 
     /* 选择下一个任务：扫描 runqueue，取 counter 最大者 */

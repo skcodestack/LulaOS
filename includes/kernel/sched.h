@@ -190,10 +190,35 @@ static inline void del_task_from_runqueue(struct task_struct *p)
     rq->nr_running--;
 }
 
-/* 设置任务状态并加入运行队列 */
+/*
+ * wake_up_process - 唤醒指定任务：置 RUNNING + 加入运行队列
+ *
+ * 参考 Linux try_to_wake_up()：
+ *   1. 状态置 TASK_RUNNING
+ *   2. enqueue_task() 重新加入运行队列
+ *
+ * 【防重复入队】run_list 自指 = 不在运行队列（约定：任务睡眠时
+ * schedule()/del_task_from_runqueue 将 run_list 重置为自指）。
+ * 已在队列中的任务（已被唤醒但还未被调度）直接返回，
+ * 否则 list_add_tail 重复插入会破坏链表。
+ *
+ * 可在硬中断上下文调用（wake_up 路径）。
+ */
 static inline void wake_up_process(struct task_struct *p)
 {
+    /*
+     * 先置状态，再做入队检查：
+     *
+     * 若任务还在运行（schedule 尚未摘除运行队列），只置 RUNNING 即可，
+     * 后续它调用 schedule() 时发现 state==RUNNING，不会真正睡眠。
+     * 若先检查后置状态，此处提前 return 会漏掉状态回写，
+     * 任务会带着 UNINTERRUPTIBLE 进入 schedule() → 永久睡眠。
+     */
     p->state = TASK_RUNNING;
+
+    if (p->run_list.next != &p->run_list)
+        return;  /* 已在运行队列，勿重复插入 */
+
     add_task_to_runqueue(p);
 }
 
