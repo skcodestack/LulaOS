@@ -1012,6 +1012,83 @@ int ata_dma_write_sectors(struct ata_host *host, unsigned char drive,
     return 0;
 }
 
+/* ======================== MBR 读取 ======================== */
+
+/*
+ * ata_read_mbr - 读取 Master Boot Record（LBA 0）并打印验证信息
+ *
+ * MBR 位于磁盘第一个扇区（LBA 0），共 512 字节：
+ *   偏移 0x000 ~ 0x1BD：引导代码 + 保留区
+ *   偏移 0x1BE ~ 0x1FD：4 个 16 字节分区表项
+ *   偏移 0x1FE ~ 0x1FF：引导签名 0x55AA
+ *
+ * 读取策略：设备支持 DMA 时优先 DMA，否则 PIO 回退
+ * （与原 probe 内联验证逻辑一致）。
+ *
+ * verbose=1 时打印引导签名与前 16 字节十六进制转储；
+ * DMA 读取成功后追加一次 PIO 读取对比，验证两种传输方式的一致性。
+ *
+ * @host:    ATA 通道（提供 I/O 基址）
+ * @dev:     目标设备（提供 drive 号、present/dma_ok 状态）
+ * @verbose: 1=打印读取结果详情，0=静默读取
+ * 返回：0 成功，-1 失败（设备不存在或读取失败）
+ */
+int ata_read_mbr(struct ata_host *host, struct ata_device *dev, int verbose)
+{
+    unsigned char mbr[512];
+    unsigned short sig;
+    int ret;
+
+    if (!dev->present)
+        return -1;
+
+    if (verbose)
+        printk("ATA: attempting MBR read (LBA 0, mode=%s)...\n",
+               dev->dma_ok ? "DMA" : "PIO");
+
+    /* DMA 优先，设备不支持 DMA 则 PIO */
+    if (dev->dma_ok)
+        ret = ata_dma_read_sectors(host, dev->drive, 0, 1, mbr);
+    else
+        ret = ata_pio_read_sectors(host, dev->drive, 0, 1, mbr);
+
+    if (ret != 0) {
+        if (verbose)
+            printk("ATA: MBR read FAILED [%s]\n",
+                   dev->dma_ok ? "DMA" : "PIO");
+        return -1;
+    }
+
+    if (!verbose)
+        return 0;
+
+    /* 检查引导签名（偏移 510~511 应为 0x55 0xAA） */
+    sig = (unsigned short)(mbr[511] << 8 | mbr[510]);
+    printk("ATA: MBR read OK [%s], signature=0x%04X\n",
+           dev->dma_ok ? "DMA" : "PIO", sig);
+    printk("ATA: MBR first 16 bytes:");
+    {
+        int i;
+        for (i = 0; i < 16; i++)
+            printk(" %02x", mbr[i]);
+    }
+    printk("\n");
+
+    /* DMA 模式下追加一次 PIO 对比，验证两者一致性 */
+    if (dev->dma_ok) {
+        unsigned char mbr_pio[512];
+        if (ata_pio_read_sectors(host, dev->drive, 0, 1, mbr_pio) == 0) {
+            unsigned int diff = 0, i;
+            for (i = 0; i < 512; i++)
+                if (mbr[i] != mbr_pio[i]) diff++;
+            printk("ATA: DMA vs PIO consistency check: %s (%u bytes differ)\n",
+                   diff == 0 ? "MATCH" : "MISMATCH", diff);
+        }
+    }
+
+    return 0;
+}
+
 /* ======================== PCI 驱动注册 ======================== */
 
 /*
@@ -1143,48 +1220,8 @@ static int ata_pci_probe(struct pci_dev *pdev,
     /* 验证测试：读取 MBR（LBA 0） */
     printk("ATA: scan complete. ch0-drive0 present=%d dma=%d\n",
            ata_devices[0][0].present, ata_devices[0][0].dma_ok);
-    if (ata_devices[0][0].present) {
-        unsigned char mbr[512];
-        unsigned short sig;
-        int ret;
-
-        printk("ATA: attempting MBR read (LBA 0, mode=%s)...\n",
-               ata_devices[0][0].dma_ok ? "DMA" : "PIO");
-
-        if (ata_devices[0][0].dma_ok) {
-            ret = ata_dma_read_sectors(&ata_hosts[0], 0, 0, 1, mbr);
-        } else {
-            ret = ata_pio_read_sectors(&ata_hosts[0], 0, 0, 1, mbr);
-        }
-
-        if (ret == 0) {
-            sig = (unsigned short)(mbr[511] << 8 | mbr[510]);
-            printk("ATA: MBR read OK [%s], signature=0x%04X\n",
-                   ata_devices[0][0].dma_ok ? "DMA" : "PIO", sig);
-            printk("ATA: MBR first 16 bytes:");
-            {
-                int i;
-                for (i = 0; i < 16; i++)
-                    printk(" %02x", mbr[i]);
-            }
-            printk("\n");
-
-            /* DMA 模式下追加一次 PIO 对比，验证两者一致性 */
-            if (ata_devices[0][0].dma_ok) {
-                unsigned char mbr_pio[512];
-                if (ata_pio_read_sectors(&ata_hosts[0], 0, 0, 1, mbr_pio) == 0) {
-                    unsigned int diff = 0, i;
-                    for (i = 0; i < 512; i++)
-                        if (mbr[i] != mbr_pio[i]) diff++;
-                    printk("ATA: DMA vs PIO consistency check: %s (%u bytes differ)\n",
-                           diff == 0 ? "MATCH" : "MISMATCH", diff);
-                }
-            }
-        } else {
-            printk("ATA: MBR read FAILED [%s]\n",
-                   ata_devices[0][0].dma_ok ? "DMA" : "PIO");
-        }
-    }
+    if (ata_devices[0][0].present)
+        ata_read_mbr(&ata_hosts[0], &ata_devices[0][0], 1);
 
     return 0;
 }

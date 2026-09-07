@@ -287,4 +287,16 @@ int ata_dma_write_sectors(struct ata_host *host, unsigned char drive,
                           unsigned int lba, unsigned char count,
                           const void *buf);
 
+/*
+ * ata_read_mbr - 读取 MBR（LBA 0）并打印验证信息
+ *
+ * 设备支持 DMA 时优先 DMA，否则 PIO 回退。
+ *
+ * @host:    ATA 通道（提供 I/O 基址）
+ * @dev:     目标设备（提供 drive 号、present/dma_ok 状态）
+ * @verbose: 1=打印签名与前 16 字节转储及 DMA/PIO 一致性对比，0=静默
+ * 返回：0 成功，-1 失败（设备不存在或读取失败）
+ */
+int ata_read_mbr(struct ata_host *host, struct ata_device *dev, int verbose);
+
 #endif /* __ATA_H__ */
