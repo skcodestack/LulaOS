@@ -553,6 +553,41 @@ int ata_pio_write_sectors(struct ata_host *host, unsigned char drive,
     return 0;
 }
 
+/* ======================== ATA 中断处理函数 ======================== */
+
+/*
+ * ata_irq_handler - ATA DMA 完成中断处理
+ *
+ * 当 DMA 传输完成时，IDE 控制器触发 IRQ14（主通道）或 IRQ15（次通道）。
+ * 本函数：
+ *   1. 检查 BM Status 的 INTR 位，确认是本通道的 DMA 完成中断
+ *   2. 唤醒等待在该通道 wait_queue 上的进程
+ *   3. 中断处理函数不直接清理 BM 状态，由被唤醒的进程完成
+ *
+ * 参数：
+ *   irq: ISA IRQ 号（14 或 15）
+ *   dev_id: 指向 ata_host 结构（注册时传入）
+ *   regs: 中断时的寄存器快照（本函数不使用）
+ */
+static void ata_irq_handler(int irq, void *dev_id, struct pt_regs *regs)
+{
+    struct ata_host *host = (struct ata_host *)dev_id;
+    unsigned char bm_sts;
+
+    /* 读取 BM Status，检查 INTR 位 */
+    bm_sts = bm_inb(host, bm_sts_off(host));
+
+    /*
+     * BM_STS_INTR (bit 2) = 1 表示 DMA 传输完成并产生了中断。
+     * 如果不是我们的中断（可能是共享 IRQ 或其他设备），直接返回。
+     */
+    if (!(bm_sts & BM_STS_INTR))
+        return;
+
+    /* 唤醒等待 DMA 完成的进程 */
+    wake_up(&host->wait_queue);
+}
+
 /* ======================== Bus Master DMA 初始化 ======================== */
 
 /*
@@ -600,42 +635,8 @@ static void ata_dma_init_channel(struct ata_host *host)
             host->dma_ok = 0;  /* 中断注册失败，回退为 PIO */
         }
     }
-}
+} 
 
-/* ======================== ATA 中断处理函数 ======================== */
-
-/*
- * ata_irq_handler - ATA DMA 完成中断处理
- *
- * 当 DMA 传输完成时，IDE 控制器触发 IRQ14（主通道）或 IRQ15（次通道）。
- * 本函数：
- *   1. 检查 BM Status 的 INTR 位，确认是本通道的 DMA 完成中断
- *   2. 唤醒等待在该通道 wait_queue 上的进程
- *   3. 中断处理函数不直接清理 BM 状态，由被唤醒的进程完成
- *
- * 参数：
- *   irq: ISA IRQ 号（14 或 15）
- *   dev_id: 指向 ata_host 结构（注册时传入）
- *   regs: 中断时的寄存器快照（本函数不使用）
- */
-static void ata_irq_handler(int irq, void *dev_id, struct pt_regs *regs)
-{
-    struct ata_host *host = (struct ata_host *)dev_id;
-    unsigned char bm_sts;
-
-    /* 读取 BM Status，检查 INTR 位 */
-    bm_sts = bm_inb(host, bm_sts_off(host));
-
-    /*
-     * BM_STS_INTR (bit 2) = 1 表示 DMA 传输完成并产生了中断。
-     * 如果不是我们的中断（可能是共享 IRQ 或其他设备），直接返回。
-     */
-    if (!(bm_sts & BM_STS_INTR))
-        return;
-
-    /* 唤醒等待 DMA 完成的进程 */
-    wake_up(&host->wait_queue);
-}
 
 /* ======================== SET FEATURES 传输模式 ======================== */
 
