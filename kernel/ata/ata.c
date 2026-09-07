@@ -22,6 +22,7 @@
 
 #include <ata/ata.h>
 #include <pci/pci.h>
+#include <arch/x86/page.h>
 #include <arch/x86/io.h>
 #include <printk.h>
 #include <libs/vsprintf.h>
@@ -556,8 +557,8 @@ int ata_pio_write_sectors(struct ata_host *host, unsigned char drive,
 /*
  * ata_dma_init_channel - 为通道分配 PRD 表并注册到 BM 寄存器
  *
- * 每个通道独立一份 PRD 表，kmalloc 分配的地址在 LulaOS 平坦映射下
- * 物理地址 = 虚拟地址。PRD 表写入 BM_PRIM_PRDT / BM_SEC_PRDT 寄存器。
+ * 每个通道独立一份 PRD 表。LulaOS 高半区内核下必须用 __pa() 将
+ * kmalloc 返回的虚拟地址转为物理地址，再写入 BM PRDT 寄存器。
  *
  * 必须在 BAR4 读取和 Bus Master 使能之后调用。
  */
@@ -567,7 +568,7 @@ static void ata_dma_init_channel(struct ata_host *host)
         return;
 
     /* 分配 PRD 表（单条目，8 字节，最多 64KB 传输） */
-    host->prd_table = (struct ata_prd *)kmalloc(sizeof(struct ata_prd));
+    host->prd_table = (struct ata_prd *)kmalloc(sizeof(struct ata_prd), GFP_KERNEL);
     if (!host->prd_table) {
         printk("ATA: DMA: PRD table allocation failed for ch%d\n",
                bm_channel(host));
@@ -575,8 +576,8 @@ static void ata_dma_init_channel(struct ata_host *host)
         return;
     }
 
-    /* LulaOS 平坦内存：虚拟地址 = 物理地址 */
-    host->prd_phys = (unsigned int)(unsigned long)host->prd_table;
+    /* 高半区内核：虚拟地址需减去 PAGE_OFFSET 得到物理地址 */
+    host->prd_phys = (unsigned int)__pa(host->prd_table);
 
     /* 写入该通道的 PRDT 基址寄存器 */
     bm_outl(host, bm_prdt_off(host), host->prd_phys);
@@ -703,8 +704,8 @@ int ata_dma_read_sectors(struct ata_host *host, unsigned char drive,
     bm_outb(host, bm_sts_off(host),
             BM_STS_ERROR | BM_STS_INTR | BM_STS_ACTIVE);
 
-    /* 3. 构建 PRD 表：单条目 */
-    host->prd_table[0].base  = (unsigned int)(unsigned long)buf;
+    /* 3. 构建 PRD 表：单条目，DMA 控制器需要物理地址 */
+    host->prd_table[0].base  = (unsigned int)__pa(buf);
     host->prd_table[0].count = (total_bytes == 65536)
                                ? 0 : (unsigned short)total_bytes;
     host->prd_table[0].flags = ATA_PRD_EOT;
@@ -842,9 +843,9 @@ int ata_dma_write_sectors(struct ata_host *host, unsigned char drive,
 
     /*
      * 3. 构建 PRD 表：buf 是数据来源，DMA 控制器从内存读 buf 写入磁盘。
-     *    const void * 转 unsigned int 在 x86-32 平坦映射下安全。
+     *    必须转为物理地址，高半区内核下虚拟 != 物理。
      */
-    host->prd_table[0].base  = (unsigned int)(unsigned long)buf;
+    host->prd_table[0].base  = (unsigned int)__pa(buf);
     host->prd_table[0].count = (total_bytes == 65536)
                                ? 0 : (unsigned short)total_bytes;
     host->prd_table[0].flags = ATA_PRD_EOT;
