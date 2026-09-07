@@ -29,6 +29,37 @@ void _kernel_init()
     _init_gdt();
 }
 
+static int thread_init_func(void *arg){ 
+    /* 注册 Platform 总线（键盘/鼠标等设备挂在此总线上） */
+    platform_bus_init();
+
+    /* ACPI DSDT 枚举：扫描 AML 发现 Platform 设备（PNP0303/PNP0F13 等） */
+    acpi_register_platform_devices();
+
+    /* PS/2 控制器初始化（注册 i8042 设备+驱动，probe 完成硬件初始化） */
+    i8042_init();
+
+    /* 注册键盘驱动（匹配 ACPI 发现的 PNP0303 设备） */
+    keyboard_init();
+
+    /* 注册鼠标驱动（匹配 ACPI 发现的 PNP0F13 设备） */
+    mouse_init();
+
+    /* PCI 总线枚举（需要 kmalloc 就绪） */
+    pci_init();
+
+    /* ATA 磁盘驱动初始化（PCI 驱动注册 + IDENTIFY 探测） */
+    ata_init(); 
+
+    /* 初始化软中断子系统（kmem_cache_init 已完成，kmalloc 可用）*/
+    softirq_init();
+
+    /* 启动所有 AP（需要页分配器和 kmalloc 就绪） */
+    smp_init();
+
+    printk("Finished\n"); 
+}
+
 /*
  * bsp_start_idle - BSP 初始化完成后，切换到 init_thread_union 栈并进入 idle 循环
  *
@@ -54,16 +85,9 @@ static __attribute__((noreturn)) void bsp_start_idle(void)
         :
         : "i"(THREAD_SIZE)
         : "memory"
-    );
-
-    /* 初始化软中断子系统（kmem_cache_init 已完成，kmalloc 可用）*/
-    softirq_init();
-
-    /* 启动所有 AP（需要页分配器和 kmalloc 就绪） */
-    smp_init();
-
-    printk("Finished\n");
-
+    ); 
+   
+    kernel_thread(thread_init_func,NULL, 0);
     /* 开中断，进入 idle 循环 */
     sti();
     cpu_idle();
@@ -91,47 +115,8 @@ asmlinkage void _kernel_main()
      * 按 4MB 对齐开始，避免与 framebuffer 虚拟地址冲突。
      * 必须在 fbcon_init() 之后调用。
      */
-    vmalloc_area_init();
-
-    /* 注册 Platform 总线（键盘/鼠标等设备挂在此总线上） */
-    platform_bus_init();
-
-    /* ACPI DSDT 枚举：扫描 AML 发现 Platform 设备（PNP0303/PNP0F13 等） */
-    acpi_register_platform_devices();
-
-    /* PS/2 控制器初始化（注册 i8042 设备+驱动，probe 完成硬件初始化） */
-    i8042_init();
-
-    /* 注册键盘驱动（匹配 ACPI 发现的 PNP0303 设备） */
-    keyboard_init();
-
-    /* 注册鼠标驱动（匹配 ACPI 发现的 PNP0F13 设备） */
-    mouse_init();
-
-    /* PCI 总线枚举（需要 kmalloc 就绪） */
-    pci_init();
-
-    /* ATA 磁盘驱动初始化（PCI 驱动注册 + IDENTIFY 探测） */
-    ata_init();
-
-    /* USB 总线注册（注册 usb_bus_type，须先于 UHCI 驱动） */
-    usb_init();
-
-    /* UHCI 主机控制器 PCI 驱动（发现并初始化 UHCI 控制器，创建 Root Hub） */
-    uhci_init();
-
-    /* DRM 核心框架初始化 */
-    drm_core_init();
-
-    /* Bochs/QEMU VBE DRM 驱动（发现 VGA 设备并初始化 KMS） */
-    drm_bochs_init();
-
-    /* DRM 图形 API 初始化（缓存 VRAM 参数，供画点/画图等接口使用） */
-    drm_fb_helper_init();
-
-    /* 绘制测试图案，验证 DRM 图片显示服务正常工作 */
-    drm_fb_test_image();
-
+    vmalloc_area_init(); 
+     
     /*
      * 切换到 init_thread_union 内核栈并进入 idle 循环
      * 在此函数内调用 smp_init() 和 cpu_idle()
