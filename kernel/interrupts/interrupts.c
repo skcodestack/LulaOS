@@ -1,8 +1,10 @@
 #include <interrupts/interrupts.h>
 #include <arch/x86/apic.h>
 #include <arch/x86/ptrace.h>
+#include <arch/x86/smp.h>
 #include <kernel/sched.h>
 #include <kernel/softirq.h>
+#include <time.h>
 #include <printk.h>
 #include <stddef.h>
 
@@ -120,6 +122,10 @@ void do_apic_timer_interrupt(struct pt_regs *regs, long error_code)
     /* EOI 必须在任何可能耗时的操作之前发送，
      * 否则 ISR 位会阻塞同级及低优先级中断 */
     apic_write(APIC_EOI, 0);
+
+    /* 更新全局时钟：jiffies 累加、xtime 前进（仅 BSP，防止多 CPU 重复计时） */
+    if (smp_processor_id() == 0)
+        do_timer();
 
     /* 驱动调度器：递减时间片，必要时置位 need_resched */
     scheduler_tick();
