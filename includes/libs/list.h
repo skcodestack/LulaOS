@@ -103,4 +103,31 @@ static __inline__ void list_splice(struct list_head *list, struct list_head *hea
 	for (pos = (head)->next, n = pos->next; pos != (head); \
 		pos = n, n = pos->next) 
 
+/*
+ * list_for_each_entry - iterate over list of given type
+ * @pos:    the type * to use as a loop cursor.
+ * @head:   the head of the list (struct list_head *).
+ * @member: the name of the list_head within the struct.
+ *
+ * 参考 Linux 2.6.20 include/linux/list.h
+ * 使用 typeof(*pos) 避免额外传 type 参数（gnu99 支持 typeof）
+ */
+#define list_for_each_entry(pos, head, member)				\
+	for (pos = list_entry((head)->next, typeof(*pos), member);	\
+	     &(pos)->member != (head);					\
+	     pos = list_entry((pos)->member.next, typeof(*pos), member))
+
+/*
+ * list_for_each_entry_safe - iterate over list, safe against removal
+ * @pos:    the type * to use as a loop cursor.
+ * @n:      another type * to use as temporary storage.
+ * @head:   the head of the list (struct list_head *).
+ * @member: the name of the list_head within the struct.
+ */
+#define list_for_each_entry_safe(pos, n, head, member)			\
+	for (pos = list_entry((head)->next, typeof(*pos), member),	\
+	     n = list_entry((pos)->member.next, typeof(*pos), member);	\
+	     &(pos)->member != (head);					\
+	     pos = n, n = list_entry((n)->member.next, typeof(*pos), member))
+
 #endif

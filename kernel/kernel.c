@@ -23,7 +23,8 @@
 #include <usb/usb.h>
 #include <usb/uhci.h>
 #include <drm/drm_core.h>
-#include <drm/drm_fb_helper.h> 
+#include <drm/drm_fb_helper.h>
+#include <block/blkdev.h>
  
 void _kernel_init()
 {
@@ -48,6 +49,9 @@ static int thread_init_func(void *arg){
 
     /* PCI 总线枚举（需要 kmalloc 就绪） */
     pci_init();
+
+    /* 块设备子系统初始化（清空主设备号注册表，必须在 ata_init 之前） */
+    block_dev_init();
 
     /* ATA 磁盘驱动初始化（PCI 驱动注册 + IDENTIFY 探测） */
     ata_init(); 
