@@ -1,5 +1,6 @@
 #include <interrupts/interrupts.h>
 #include <arch/x86/ptrace.h>
+#include <arch/x86/uaccess.h>   /* copy_from_user, EFAULT */
 #include <printk.h>
 #include <libs/string.h>
 
@@ -10,17 +11,47 @@ static syscall_fn_t syscall_table[NR_SYSCALLS];
 
 /*
  * sys_write(fd, buf, count, _, _)
- * 简化版：忽略 fd，将 buf 内容通过 printk 输出
- * 返回写入字节数
+ *
+ * 通过 copy_from_user 将用户缓冲区数据拷贝到内核栈缓冲后再输出。
+ *
+ * 流程（Linux 2.6.20 标准路径）：
+ *   1. 校验 count 合法性（<= 0 返回 -EINVAL，过大则截断到 WRITE_BUF_MAX）
+ *   2. copy_from_user(kbuf, buf, count)：
+ *      - access_ok(buf, count) 检查用户地址 < TASK_SIZE
+ *      - 校验失败 → 返回未拷贝字节数（>0）→ sys_write 返回 -EFAULT
+ *      - 校验成功 → memcpy 到内核缓冲区
+ *   3. 逐字符 printk 输出内核缓冲区内容
+ *   4. 返回实际写入字节数
+ *
+ * 当前尚未引入 VFS，fd 参数暂忽略，直接走 printk 控制台输出。
+ * VFS 接入后（Task 8）改为 vfs_write(fd, kbuf, count)。
  */
+#define WRITE_BUF_MAX  1024
+
 static long sys_write(long fd, long buf, long count, long _d, long _e)
 {
     (void)fd; (void)_d; (void)_e;
-    if (!buf || count <= 0)
-        return -1;
-    const char *s = (const char *)buf;
-    for (long i = 0; i < count && s[i]; i++)
-        printk("%c", s[i]);
+
+    if (count <= 0)
+        return -1;  /* -EINVAL */
+
+    /* 限制单次写入量，避免内核栈溢出 */
+    if (count > WRITE_BUF_MAX)
+        count = WRITE_BUF_MAX;
+
+    /* 内核栈缓冲区（最大 WRITE_BUF_MAX 字节） */
+    char kbuf[WRITE_BUF_MAX];
+
+    /* copy_from_user：校验用户地址并拷贝；返回未拷贝字节数 */
+    unsigned long uncopied = copy_from_user(kbuf, (const void *)buf,
+                                            (unsigned long)count);
+    if (uncopied)
+        return -EFAULT;  /* 用户地址非法 */
+
+    /* 从内核缓冲区输出（不再直接访问用户指针） */
+    for (long i = 0; i < count && kbuf[i]; i++)
+        printk("%c", kbuf[i]);
+
     return count;
 }
 
