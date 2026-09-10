@@ -59,6 +59,24 @@ static int thread_init_func(void *arg){
     /* SATA/AHCI 子系统初始化（匹配 class 0x010601 AHCI 控制器，扫描端口） */
     sata_init();
 
+     /* USB 总线注册（注册 usb_bus_type，须先于 UHCI 驱动） */
+    usb_init();
+
+    /* UHCI 主机控制器 PCI 驱动（发现并初始化 UHCI 控制器，创建 Root Hub） */
+    uhci_init();
+
+    /* DRM 核心框架初始化 */
+    drm_core_init();
+
+    /* Bochs/QEMU VBE DRM 驱动（发现 VGA 设备并初始化 KMS） */
+    drm_bochs_init();
+
+    /* DRM 图形 API 初始化（缓存 VRAM 参数，供画点/画图等接口使用） */
+    drm_fb_helper_init();
+
+    /* 绘制测试图案，验证 DRM 图片显示服务正常工作 */
+    drm_fb_test_image();
+
     /* 初始化软中断子系统（kmem_cache_init 已完成，kmalloc 可用）*/
     softirq_init();
 
