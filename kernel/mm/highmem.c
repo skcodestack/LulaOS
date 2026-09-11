@@ -32,6 +32,7 @@
 #include <mm/mm.h>
 #include <mm/mmzone.h>
 #include <printk.h>
+#include <stddef.h>
 
 unsigned long highstart_pfn, highend_pfn;
 
