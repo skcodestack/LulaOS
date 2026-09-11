@@ -7,12 +7,17 @@
  *   Linux drivers/ata/libahci.c    — ahci_init_one(), ahci_port_start()
  *   Linux drivers/ata/libata-core.c — ata_dev_read_id() IDENTIFY 流程
  *
- * 架构（单文件实现，PCI 驱动注册 + AHCI 端口管理 + 总线扫描）：
+ * 架构（Task 5 拆分为两文件）：
+ *   kernel/sata/sata.c      — 传输层：端口控制、命令发送、IDENTIFY、
+ *                             DMA 读写、PCI probe（全局 sata_host_instance）
+ *   kernel/sata/sata-blk.c  — 总线扫描（sata_scan_host）+ 块设备接入
+ *                             （register_blkdev + add_disk + partition_scan）
+ *
+ * 初始化路径：
  *   sata_init()          → pci_register_driver()
- *   sata_pci_probe()     → ioremap BAR5, 全局使能, 端口初始化
- *   sata_port_init()     → 分配 Command List / FIS Receive, 启动端口
- *   sata_scan_host()     → 遍历 PxSSTS，检测在线设备
- *   sata_identify()      → H2D FIS (0xEC) 获取设备信息
+ *   sata_pci_probe()     → ioremap BAR5, 全局使能, 端口初始化（sata.c）
+ *   sata_scan_host()     → 遍历 PxSSTS，检测在线设备（sata-blk.c）
+ *   sata_identify()      → H2D FIS (0xEC) 获取设备信息（sata.c）
  *   sata_read_sectors()  → READ DMA EXT (0x25) 通过 PRDT
  *   sata_write_sectors() → WRITE DMA EXT (0x35) 通过 PRDT
  *
@@ -264,8 +269,30 @@ static inline void sata_writel(volatile unsigned int *addr, unsigned int val)
  *
  * 注册 PCI 驱动，匹配 class=0x010601 的 AHCI 控制器，
  * 与现有 ata_piix（class 0x010100）互不干扰。
+ * 实现位于 kernel/sata/sata.c（probe 全局使能与端口初始化）。
  */
 void sata_init(void);
+
+/*
+ * sata_scan_host - 扫描 AHCI 控制器所有端口并接入块设备层
+ *
+ * 遍历 ports_implemented 位图，对每个已实现端口：
+ *   1. 读取 PxSSTS.DET：=3 表示设备在线且 PHY 已建立
+ *   2. 读取 PxSIG：判断设备类型（0x00000101=SATA 磁盘）
+ *   3. 调用 sata_identify()：发送 IDENTIFY 获取型号/序列号/容量
+ * 扫描完成后调用块设备接入（register_blkdev + add_disk + partition_scan）。
+ * 实现位于 kernel/sata/sata-blk.c，由 sata_pci_probe() 调用。
+ */
+void sata_scan_host(struct sata_host *host);
+
+/*
+ * sata_identify - 发送 IDENTIFY DEVICE 命令
+ *
+ * 填充 port->sectors/sectors48/model/serial。
+ * 返回：0 成功，-1 失败。
+ * 实现位于 kernel/sata/sata.c（依赖命令发送路径 sata_issue_cmd）。
+ */
+int sata_identify(struct sata_port *port);
 
 /*
  * sata_read_sectors - DMA 方式读取扇区（LBA48）

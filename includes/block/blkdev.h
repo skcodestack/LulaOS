@@ -2,7 +2,7 @@
  * blkdev.h - LulaOS 块设备核心抽象
  *
  * 参考 Linux 2.6.20：
- *   include/linux/genhd.h     — gendisk, dev_t, MAJOR/MINOR
+ *   include/linux/genhd.h     — gendisk, hd_struct, dev_t, MAJOR/MINOR
  *   include/linux/fs.h        — block_device, block_device_operations
  *   include/linux/blkdev.h    — submit_bh, 请求队列（本版本暂未实现）
  *
@@ -11,6 +11,8 @@
  *   - gendisk 通过静态数组注册，由 MAJOR 索引查找
  *   - submit_bh 同步直调 drive->strategy()，不做请求队列与电梯调度
  *     （后续 Task 可迭代引入 request_queue + CFQ）
+ *   - 分区支持：hd_struct 描述分区，bd_part 挂接分区视图，
+ *     submit_bh 完成相对扇区 → 整盘 LBA 的重映射（驱动无感知）
  */
 
 #ifndef __BLKDEV_H__
@@ -21,7 +23,7 @@
 /* ======================== dev_t：设备号编码 ======================== */
 
 /*
- * Linux 2.6.20 设备号布局（新编码，2.6 起使用）：
+ * Linux   设备号布局（新编码，2.6 起使用）：
  *   bits [31:20]  = MAJOR（12 位，最多 4096 个主设备号）
  *   bits [19:0]   = MINOR（20 位，最多 1048576 个次设备号）
  *
@@ -47,6 +49,29 @@ typedef unsigned long dev_t;
 struct block_device;
 struct gendisk;
 
+/* ======================== hd_struct（分区描述） ======================== */
+
+/*
+ * hd_struct - 磁盘分区描述符
+ *
+ * 参考 Linux include/linux/genhd.h struct hd_struct（简化）：
+ *   - start_sect：分区第一个扇区的整盘 LBA（512B 单位）
+ *   - nr_sects：  分区扇区数（512B 单位）
+ *
+ * 每个"分区" block_device 通过 bd_part 指向一个 hd_struct；
+ * 整盘 block_device 的 bd_part 恒为 NULL。
+ *
+ * 分区重映射在 submit_bh 层完成（相对扇区 + start_sect → 整盘 LBA），
+ * 驱动 strategy 只认整盘 LBA，无需感知分区存在。
+ *
+ * 生命周期：add_partition() 中 kmalloc，delete_partition() 中 kfree；
+ * 分区 bdev 长期持有此结构（生命周期 = 磁盘生命周期）。
+ */
+struct hd_struct {
+    unsigned long start_sect;   /* 分区起始扇区（整盘 LBA，512B 单位） */
+    unsigned long nr_sects;     /* 分区扇区数（512B 单位） */
+};
+
 /* ======================== block_device_operations ======================== */
 
 /*
@@ -57,7 +82,7 @@ struct gendisk;
  * strategy(bdev, sector, count, buf, write)：
  *   核心 I/O 入口。同步执行，返回 0 表示成功，负数表示错误。
  *   @bdev:   目标块设备（携带 dev_t 与 gendisk 反向引用）
- *   @sector: 起始逻辑扇区号（LBA，512 字节单位）
+ *   @sector: 起始逻辑扇区号（LBA，512 字节单位；分区已由块层重映射为整盘 LBA）
  *   @count:  扇区数（1~255，PIO 单次传输上限）
  *   @buf:    数据缓冲区（至少 count * 512 字节）
  *   @write:  0=读，1=写
@@ -82,14 +107,20 @@ struct block_device_operations {
  * 每个 (MAJOR, MINOR) 对应一个 block_device。
  * bdget() 负责查找或分配，brelse_dev() 释放。
  *
- * 与 Linux 2.6.20 的区别：
- *   - 不含 inode/bdev_inode 反向引用（VFS 接入 Task 6 时扩展）
+ * 与 Linux  的区别：
+ *   - 不含 inode/bdev_inode 反向引用（VFS 接入  ）
  *   - 不含 bd_mutex（单线程内核，无需锁）
  *   - bd_openers 简化为打开计数
+ *
+ * 分区语义：
+ *   整盘 bdev（MINOR=first_minor）  ：bd_part == NULL，I/O 直达整盘 LBA
+ *   分区 bdev（MINOR=first_minor+N）：bd_part 指向 hd_struct，
+ *                                     submit_bh 自动重映射 + 分区边界校验
  */
 struct block_device {
     dev_t               bd_dev;     /* 设备号（MAJOR+MINOR） */
     struct gendisk     *bd_disk;    /* 指向所属 gendisk */
+    struct hd_struct   *bd_part;    /* 分区描述（整盘为 NULL，分区指向 hd_struct） */
     struct list_head    bd_list;    /* 链入全局 bdev_list */
     int                 bd_openers; /* 打开计数 */
 };
@@ -103,7 +134,7 @@ struct block_device {
  * 分区（hd0p1 等）通过 part[] 数组或直接 MINOR 偏移描述。
  *
  * capacity：以 512 字节扇区为单位的总容量（整盘）。
- *            分区容量通过分区表解析后记录在 partition 结构中（Task 5）。
+ *            分区容量通过分区表解析后记录在 hd_struct 中。
  *
  * 参考 Linux 2.6.20 struct gendisk（drivers/block/genhd.c）：
  *   - major/minor：设备号，minor 为整盘的起始 MINOR（分区按步长递增）
@@ -158,6 +189,8 @@ int unregister_blkdev(unsigned int major, const char *name);
  * 内部调用 bdget(MKDEV(disk->major, disk->first_minor)) 分配整盘 block_device，
  * 并将 disk->bd_disk 反向引用建立起来，使后续 bread/submit_bh 可以通过
  * bdev->bd_disk->fops->strategy 找到驱动入口。
+ *
+ * 调用后应执行 partition_scan(disk) 解析分区表（创建分区 block_device）。
  */
 void add_disk(struct gendisk *disk);
 
@@ -166,6 +199,41 @@ void add_disk(struct gendisk *disk);
  * @disk: 要注销的 gendisk
  */
 void del_gendisk(struct gendisk *disk);
+
+/*
+ * add_partition - 创建分区 block_device
+ * @disk:       所属 gendisk（须已 add_disk）
+ * @partno:     分区号（1 ~ disk->minors-1，0 保留给整盘）
+ * @start_sect: 分区起始扇区（整盘 LBA，512B 单位）
+ * @nr_sects:   分区扇区数
+ * 返回：0 成功，-1 失败（参数非法 / 内存不足）
+ *
+ * 流程（参考 Linux block/genhd.c add_partition）：
+ *   kmalloc hd_struct → bdget(MKDEV(major, first_minor+partno))
+ *   → 填 bdev->bd_disk / bd_part → 分区 bdev 进入全局 bdev_list
+ *
+ * 分区 bdev 的引用由本函数长期持有（openers=1），
+ * 由 delete_partition() 释放，不随 bread/bdput 释放。
+ */
+int add_partition(struct gendisk *disk, int partno,
+                  unsigned long start_sect, unsigned long nr_sects);
+
+/*
+ * delete_partition - 删除分区 block_device 并释放 hd_struct
+ * @disk:   所属 gendisk
+ * @partno: 分区号（1 ~ disk->minors-1）
+ */
+void delete_partition(struct gendisk *disk, int partno);
+
+/*
+ * partition_scan - 读取并解析磁盘 MBR 分区表
+ * @disk: 已 add_disk 的 gendisk
+ *
+ * 读取整盘 LBA0（经 buffer cache），校验 0x55AA 签名后遍历
+ * 4 个主分区条目，对每个有效条目调用 add_partition()。
+ * 实现在 kernel/block/partition.c。
+ */
+void partition_scan(struct gendisk *disk);
 
 /*
  * bdget - 按设备号查找或分配 block_device
@@ -193,10 +261,14 @@ struct gendisk *get_gendisk(dev_t dev);
 /*
  * submit_bh - 同步块 I/O 提交（简化路径）
  * @bdev:   目标块设备
- * @sector: 起始扇区号（512B 单位，LBA）
+ * @sector: 起始扇区号（512B 单位，LBA；分区 bdev 传分区相对扇区）
  * @count:  扇区数
  * @buf:    数据缓冲区（至少 count * 512 字节）
  * @write:  0=读，1=写
+ *
+ * 分区重映射（关键语义）：
+ *   bdev->bd_part 非空时：先按 nr_sects 校验，再 sector += start_sect，
+ *   驱动收到的是整盘 LBA；整盘 bdev 走原有 capacity 校验。
  *
  * 直接调用 bdev->bd_disk->fops->strategy()，同步阻塞直到完成。
  * 返回：0 成功，负数错误码（-EIO / -ENODEV 等）。
@@ -210,13 +282,20 @@ int submit_bh(struct block_device *bdev,
               void *buf, int write);
 
 /*
- * blkdev_get_capacity - 获取块设备容量（扇区数）
+ * blkdev_get_capacity - 获取块设备容量（扇区数，分区感知）
  * @bdev: 块设备
  * 返回：容量（扇区数），0 表示设备无效
+ *
+ * 分区 bdev：返回 hd_struct.nr_sects（分区容量）
+ * 整盘 bdev：返回 gendisk.capacity（整盘容量）
  */
 static inline unsigned long blkdev_get_capacity(struct block_device *bdev)
 {
-    if (!bdev || !bdev->bd_disk)
+    if (!bdev)
+        return 0;
+    if (bdev->bd_part)
+        return bdev->bd_part->nr_sects;
+    if (!bdev->bd_disk)
         return 0;
     return bdev->bd_disk->capacity;
 }

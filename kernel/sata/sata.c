@@ -1,11 +1,20 @@
 /*
- * LulaOS SATA/AHCI 子系统实现
+ * LulaOS SATA/AHCI 子系统实现（传输层 + PCI 探测）
  *
  * 参考：
  *   Intel AHCI 1.3 Specification
  *   Linux drivers/ata/ahci.c         — ahci_init_one()
  *   Linux drivers/ata/libahci.c      — ahci_port_start(), ahci_qc_issue()
  *   Linux drivers/ata/libata-core.c  — ata_dev_read_id()
+ *
+ * 职责（与 kernel/sata/sata-blk.c 分离）：
+ *   - 全局状态：sata_host_instance（单控制器）
+ *   - 端口控制：停止/启动、Command List / FIS Receive / Command Table 分配
+ *   - 命令发送：中断驱动等待（prepare_to_wait → PORT_CI → schedule）
+ *   - IDENTIFY DEVICE（sata_identify，导出供扫描层调用）
+ *   - DMA 读写（sata_read/write_sectors，LBA48）
+ *   - PCI probe：BAR5 ioremap、全局使能、端口初始化
+ *   - 扫描与块设备接入在 sata-blk.c（sata_scan_host + add_disk）
  *
  * 实现功能：
  *   - AHCI 控制器发现（PCI class 01h/06h）
@@ -345,7 +354,7 @@ static int sata_issue_cmd(struct sata_port *port, unsigned int slot,
  *   - word 10-19 : 序列号（20 字符）
  *   - word 27-46 : 型号（40 字符）
  */
-static int sata_identify(struct sata_port *port)
+int sata_identify(struct sata_port *port)
 {
     struct ahci_cmd_header hdr;
     struct ahci_cmd_table *ct = port->cmd_table;
@@ -709,82 +718,6 @@ static int sata_port_init(struct sata_host *host, unsigned int port_no)
     return 0;
 }
 
-/* ======================== 总线扫描 ======================== */
-
-/*
- * sata_scan_host - 扫描 AHCI 控制器所有端口
- *
- * 遍历 ports_implemented 位图，对每个已实现的端口：
- *   1. 读取 PxSSTS.DET：=3 表示设备在线且 PHY 已建立
- *   2. 读取 PxSIG：判断设备类型（0x00000101=SATA 磁盘）
- *   3. 调用 sata_identify()：发送 IDENTIFY 获取型号/序列号/容量
- *
- * PxSSTS.DET 状态含义：
- *   0 = 无设备或 PHY 未检测到
- *   1 = 设备存在但 PHY 通信未建立（需要复位）
- *   3 = 设备存在且 PHY 通信已建立（可发送命令）
- */
-static void sata_scan_host(struct sata_host *host)
-{
-    unsigned int port_no;
-    unsigned int online_count = 0;
-
-    printk("SATA: scanning %u ports (PI=0x%08x)...\n",
-           host->num_ports, host->ports_implemented);
-
-    for (port_no = 0; port_no < host->num_ports && port_no < SATA_MAX_PORTS;
-         port_no++) {
-        struct sata_port *port = &host->ports[port_no];
-        unsigned int ssts, sig, det;
-
-        /* 跳过未实现的端口 */
-        if (!(host->ports_implemented & (1U << port_no)))
-            continue;
-
-        /* 读取 PxSSTS */
-        ssts = sata_readl(port->mmio + (PORT_SSTS / 4));
-        det  = ssts & 0x0F;
-
-        if (det != SSTS_DET_PHYUP) {
-            printk("SATA: port%u: no device (ssts=0x%08x det=%u)\n",
-                   port_no, ssts, det);
-            continue;
-        }
-
-        /* 读取 PxSIG 判断设备类型 */
-        sig = sata_readl(port->mmio + (PORT_SIG / 4));
-
-        printk("SATA: port%u: device detected sig=0x%08x\n", port_no, sig);
-
-        if (sig == SATA_SIG_DISK) {
-            port->type = 0;
-            printk("SATA: port%u: SATA hard disk\n", port_no);
-        } else if (sig == SATA_SIG_ATAPI) {
-            port->type = 1;
-            printk("SATA: port%u: SATAPI device (not supported yet)\n",
-                   port_no);
-            /* ATAPI 暂不处理，跳过 IDENTIFY */
-            continue;
-        } else {
-            printk("SATA: port%u: unknown device type (sig=0x%08x), skipping\n",
-                   port_no, sig);
-            continue;
-        }
-
-        port->present = 1;
-        online_count++;
-
-        /* 发送 IDENTIFY DEVICE */
-        if (sata_identify(port) != 0) {
-            port->present = 0;
-            printk("SATA: port%u: IDENTIFY failed, marking absent\n",
-                   port_no);
-        }
-    }
-
-    printk("SATA: scan complete. %u device(s) online\n", online_count);
-}
-
 /* ======================== PCI 驱动注册 ======================== */
 
 /*
@@ -811,7 +744,7 @@ static const struct pci_device_id sata_pci_id_table[] = {
  *   4. 全局 AHCI 使能（GHC.AE = 1）
  *   5. 读取 CAP（端口数）和 PI（已实现端口位图）
  *   6. 初始化每个已实现端口
- *   7. 扫描总线，发现并识别设备
+ *   7. 扫描总线，发现并识别设备（sata_scan_host，实现在 sata-blk.c）
  */
 static int sata_pci_probe(struct pci_dev *pdev,
                           const struct pci_device_id *id)
@@ -961,7 +894,7 @@ static int sata_pci_probe(struct pci_dev *pdev,
         printk("SATA: global interrupt enabled (GHC.IE=1)\n");
     }
 
-    /* 扫描总线，发现并识别设备（内部 IDENTIFY 通过中断驱动完成） */
+    /* 扫描总线，发现并识别设备（实现位于 sata-blk.c，扫描后接入块设备层） */
     sata_scan_host(host);
 
     return 0;

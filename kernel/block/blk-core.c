@@ -2,7 +2,8 @@
  * blk-core.c - LulaOS 块设备核心层
  *
  * 参考 Linux 2.6.20：
- *   block/genhd.c          — register_blkdev, add_disk, gendisk 管理
+ *   block/genhd.c          — register_blkdev, add_disk, gendisk 管理,
+ *                            add_partition / delete_partition (hd_struct)
  *   fs/block_dev.c         — bdget, bdput, block_device 生命周期
  *   block/ll_rw_blk.c     — submit_bh（简化版，直调 strategy）
  *
@@ -11,9 +12,14 @@
  *   2) add_disk()           — gendisk 注册 + 自动创建整盘 block_device
  *   3) submit_bh()          — 同步 I/O：直接调用 bdev->bd_disk->fops->strategy()
  *
+ * 分区支持（Task 5）：
+ *   add_partition()         — 创建分区 block_device（bd_part 指向 hd_struct）
+ *   delete_partition()      — 删除分区并释放 hd_struct
+ *   submit_bh()             — 分区扇区重映射（相对扇区 → 整盘 LBA）
+ *
  * 简化点（对照 Linux 2.6.20）：
  *   - 无 request_queue / elevator（电梯调度）
- *   - 无 bio 层（块 I/O 由 submit_bh 直接完成，Task 4 buffer_head 接入后扩展）
+ *   - 无 bio 层（块 I/O 由 submit_bh 直接完成）
  *   - 无引用计数 kobject（单线程，无并发释放问题）
  */
 
@@ -173,7 +179,7 @@ int unregister_blkdev(unsigned int major, const char *name)
  *   4. 打印磁盘容量信息
  *
  * 注意：分区 block_device 不在此处创建，
- *       由 Task 5 partition.c 解析 MBR 后调用 add_partition() 创建。
+ *       由 partition.c 解析 MBR 后调用 add_partition() 创建。
  */
 void add_disk(struct gendisk *disk)
 {
@@ -215,7 +221,7 @@ void add_disk(struct gendisk *disk)
  * del_gendisk - 注销 gendisk
  *
  * 从 disk_list 移除，并释放对应的整盘 block_device。
- * 分区 block_device 需在此之前由调用方（partition.c）清理。
+ * 分区 block_device 需在此之前由调用方（delete_partition）清理。
  */
 void del_gendisk(struct gendisk *disk)
 {
@@ -239,6 +245,88 @@ void del_gendisk(struct gendisk *disk)
     printk("block: disk '%s' removed\n", disk->disk_name);
 }
 
+/* ======================== add_partition / delete_partition ======================== */
+
+/*
+ * add_partition - 创建分区 block_device
+ *
+ * 流程（参考 Linux 2.6.20 block/genhd.c add_partition）：
+ *   1. 参数校验：partno ∈ [1, disk->minors)，0 保留给整盘
+ *   2. kmalloc hd_struct（分区起始扇区 + 扇区数）
+ *   3. bdget(MKDEV(major, first_minor + partno)) 分配分区 block_device
+ *   4. 填充 bdev->bd_disk（反向引用）与 bdev->bd_part（分区描述）
+ *
+ * 引用语义：bdget 后 openers=1，此引用由分区长期持有，
+ * 不随 bread/bdput 释放，delete_partition() 时统一回收。
+ * 边界校验（start+nr <= capacity）由调用方 partition_scan 负责。
+ *
+ * 返回：0 成功，-1 失败（参数非法 / 内存不足 / bdev 分配失败）
+ */
+int add_partition(struct gendisk *disk, int partno,
+                  unsigned long start_sect, unsigned long nr_sects)
+{
+    struct block_device *bdev;
+    struct hd_struct *part;
+
+    if (!disk || partno <= 0 || partno >= disk->minors) {
+        printk("block: add_partition: invalid partno %d for '%s'\n",
+               partno, disk ? disk->disk_name : "?");
+        return -1;
+    }
+
+    part = (struct hd_struct *)kmalloc(sizeof(struct hd_struct), GFP_KERNEL);
+    if (!part) {
+        printk("block: add_partition: kmalloc failed for '%sp%d'\n",
+               disk->disk_name, partno);
+        return -1;
+    }
+    part->start_sect = start_sect;
+    part->nr_sects   = nr_sects;
+
+    bdev = bdget(MKDEV(disk->major, disk->first_minor + partno));
+    if (!bdev) {
+        kfree(part);
+        return -1;
+    }
+    bdev->bd_disk = disk;
+    bdev->bd_part = part;
+
+    printk("block: partition '%sp%d' registered (major=%d minor=%d)\n",
+           disk->disk_name, partno, disk->major,
+           disk->first_minor + partno);
+    return 0;
+}
+
+/*
+ * delete_partition - 删除分区 block_device 并释放 hd_struct
+ *
+ * 按 (major, first_minor+partno) 在 bdev_list 中查找分区 bdev，
+ * 释放其 bd_part（hd_struct）与 bdev 自身。
+ * 注意：调用前应确保无上层使用者（bd_openers 由本函数直接忽略，
+ * 生命周期管理由调用方负责，与 del_gendisk 保持一致）。
+ */
+void delete_partition(struct gendisk *disk, int partno)
+{
+    struct block_device *bdev, *tmp;
+    dev_t dev;
+
+    if (!disk || partno <= 0 || partno >= disk->minors)
+        return;
+
+    dev = MKDEV(disk->major, disk->first_minor + partno);
+    list_for_each_entry_safe(bdev, tmp, &bdev_list, bd_list) {
+        if (bdev->bd_dev == dev) {
+            list_del(&bdev->bd_list);
+            if (bdev->bd_part)
+                kfree(bdev->bd_part);
+            kfree(bdev);
+            printk("block: partition '%sp%d' removed\n",
+                   disk->disk_name, partno);
+            return;
+        }
+    }
+}
+
 /* ======================== bdget / bdput ======================== */
 
 /*
@@ -248,7 +336,8 @@ void del_gendisk(struct gendisk *disk)
  *   1. 遍历 bdev_list，匹配 bd_dev
  *   2. 命中：增加 bd_openers 计数并返回
  *   3. 未命中：kmalloc 分配，初始化，链入 bdev_list
- *      → bd_disk 暂设为 NULL，由 add_disk() 或后续代码填充
+ *      → bd_disk 暂设为 NULL，由 add_disk() 或 add_partition() 填充
+ *      → bd_part 由 add_partition() 填充（整盘恒为 NULL）
  *      → 若该 MAJOR 未注册（blkdevs[] 为空），分配失败返回 NULL
  *
  * 返回：block_device *，NULL 表示分配失败或 MAJOR 未注册
@@ -284,7 +373,9 @@ struct block_device *bdget(dev_t dev)
     memset(bdev, 0, sizeof(struct block_device));
     bdev->bd_dev     = dev;
     bdev->bd_disk    = NULL;  /* 由调用方（add_disk/add_partition）填充 */
+    bdev->bd_part    = NULL;  /* 由 add_partition 填充（整盘恒为 NULL） */
     bdev->bd_openers = 1;
+
     INIT_LIST_HEAD(&bdev->bd_list);
 
     /* 链入全局 bdev_list */
@@ -346,9 +437,17 @@ struct gendisk *get_gendisk(dev_t dev)
  *
  * 流程（简化版，参考 Linux 2.6.20 block/ll_rw_blk.c submit_bh）：
  *   1. 校验 bdev 与 fops->strategy 是否存在
- *   2. 校验 sector + count 不超出磁盘容量（capacity）
+ *   2. 边界校验 + 分区重映射（见下）
  *   3. 直接调用 fops->strategy(bdev, sector, count, buf, write)
  *   4. 返回 strategy 的结果（0 成功，负数错误码）
+ *
+ * 分区重映射（关键语义，参考 Linux fs/block_dev.c 的 bi_sector 处理）：
+ *   bdev->bd_part 非空（分区 bdev）：
+ *     a. 先按分区容量校验：sector + count <= bd_part->nr_sects
+ *        （用重映射前的相对扇区校验，防止越界写破坏邻近分区）
+ *     b. sector += bd_part->start_sect（相对扇区 → 整盘 LBA）
+ *     c. 驱动收到整盘 LBA，无需感知分区
+ *   bd_part 为空（整盘 bdev）：按 disk->capacity 校验（原有逻辑）
  *
  * Linux 原始路径（完整路径，本版本暂未实现）：
  *   submit_bh()
@@ -378,8 +477,21 @@ int submit_bh(struct block_device *bdev,
         return -19; /* -ENODEV */
     }
 
-    /* 容量边界检查：sector + count 不能超出 capacity */
-    if (sector + count > disk->capacity) {
+    /*
+     * 边界校验与分区重映射：
+     *   分区 bdev：先按 nr_sects 校验原始 sector，再加 start_sect
+     *   整盘 bdev：按整盘 capacity 校验
+     */
+    if (bdev->bd_part) {
+        struct hd_struct *part = bdev->bd_part;
+        if (sector + count > part->nr_sects) {
+            printk("block: submit_bh: I/O beyond partition end "
+                   "(sector=%lu + count=%u > nr_sects=%lu)\n",
+                   sector, count, part->nr_sects);
+            return -5;  /* -EIO */
+        }
+        sector += part->start_sect;
+    } else if (sector + count > disk->capacity) {
         printk("block: submit_bh: I/O beyond capacity "
                "(sector=%lu + count=%u > capacity=%lu)\n",
                sector, count, disk->capacity);

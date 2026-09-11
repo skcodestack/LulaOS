@@ -7,6 +7,12 @@
  * Legacy (Compatibility) 模式下的固定 I/O 端口：
  *   Primary Channel:   cmd=0x1F0  ctrl=0x3F6   IRQ14
  *   Secondary Channel: cmd=0x170  ctrl=0x376   IRQ15
+ *
+ * 文件组织（ 拆分）：
+ *   kernel/ata/ata.c      — 传输层：PIO/DMA 读写、IDENTIFY、SET FEATURES、
+ *                           DMA 通道初始化（参数驱动，无全局状态）
+ *   kernel/ata/ata-pci.c  — 探测层：全局 ata_hosts/ata_devices、PCI probe、
+ *                           块设备接入（register_blkdev + add_disk + partition_scan）
  */
 
 #ifndef __ATA_H__
@@ -230,6 +236,7 @@ struct ata_device {
  *
  * 注册 PCI 驱动并匹配已枚举的 PIIX3/PIIX4 IDE 控制器。
  * 必须在 pci_init() 之后调用。
+ * 实现位于 kernel/ata/ata-pci.c（探测 + 块设备接入）。
  */
 void ata_init(void);
 
@@ -288,9 +295,43 @@ int ata_dma_write_sectors(struct ata_host *host, unsigned char drive,
                           const void *buf);
 
 /*
+ * ata_identify - 发送 IDENTIFY DEVICE 命令探测设备
+ *
+ * 填充 dev->present/sectors/model/serial/dma_ok。
+ * 由 ata-pci.c 的 probe 对每个通道的 Master/Slave 调用。
+ *
+ * @host:  ATA 通道
+ * @drive: 0=Master, 1=Slave
+ * @dev:   输出的设备描述（调用方分配）
+ */
+void ata_identify(struct ata_host *host, unsigned char drive,
+                  struct ata_device *dev);
+
+/*
+ * ata_set_dma_mode - 向驱动器发送 SET FEATURES 启用 DMA 传输模式
+ *
+ * @dev:  目标设备（提供 host/drive）
+ * @mode: 传输模式值（如 ATA_XFER_MWDMA2 = 0x22）
+ * 返回：0 成功，-1 失败（失败时调用方应将 dev->dma_ok 置 0 回退 PIO）
+ */
+int ata_set_dma_mode(struct ata_device *dev, unsigned char mode);
+
+/*
+ * ata_dma_init_channel - 为通道分配 PRD 表并注册 IRQ
+ *
+ * 前提：host->dma_ok == 1（BAR4 有效）。
+ * 失败时将 host->dma_ok 置 0（后续自动回退 PIO）。
+ * 由 ata-pci.c 的 probe 对每个通道调用。
+ *
+ * @host: ATA 通道
+ */
+void ata_dma_init_channel(struct ata_host *host);
+
+/*
  * ata_read_mbr - 读取 MBR（LBA 0）并打印验证信息
  *
  * 设备支持 DMA 时优先 DMA，否则 PIO 回退。
+ * 实现位于 kernel/ata/ata-pci.c（probe 的驱动层自测）。
  *
  * @host:    ATA 通道（提供 I/O 基址）
  * @dev:     目标设备（提供 drive 号、present/dma_ok 状态）
