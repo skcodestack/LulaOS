@@ -31,6 +31,7 @@
 #include <block/buffer_head.h>      /* bread / brelse / BLOCK_SIZE */
 #include <arch/x86/highmem.h>      /* kmap / kunmap */
 #include <printk.h>
+#include <stddef.h>
 
 /* ======================== MBR 布局常量 ======================== */
 
