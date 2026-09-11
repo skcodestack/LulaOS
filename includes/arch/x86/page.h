@@ -40,6 +40,8 @@ typedef struct { unsigned long pgprot; } pgprot_t;
 #define __pa(vaddr) ((unsigned long)(vaddr) - PAGE_OFFSET)
 #define __va(paddr) ((void *)((unsigned long)(paddr) + PAGE_OFFSET))
 #define virt_to_page(kaddr)	(mem_map + (__pa(kaddr) >> PAGE_SHIFT))
+/* page 结构体 → 物理地址（virt_to_page 的反操作，kmap 依赖此宏） */
+#define page_to_phys(page)	(((unsigned long)((page) - mem_map)) << PAGE_SHIFT)
 
 #endif
 

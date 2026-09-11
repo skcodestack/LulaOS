@@ -89,6 +89,16 @@ static void __init persist_area_init()
     int i = pgd_index(vaddr);  // PAGE_OFFSET index on the pgd table
     pgd_t *pgd = pgd_base + i; // PAGE_OFFSET item on the pgd table
 
+    /*
+     * pkmap_page_table 须在循环前计算：PKMAP_BASE = 0xfe000000（4MB 对齐），
+     * 整个 pkmap 区域（1024 页 = 4MB）恰好落在一个 PGD 条目内，
+     * 对应一页 PTE 表（1024 个 PTE 条目）。
+     *
+     * 若在循环后计算，pgd/vaddr 已被循环增量推至 pkmap 末尾之后，
+     * 导致 pkmap_page_table 指向错误的 PTE 页（越界）。
+     */
+    pkmap_page_table = pte_offset(pgd_base + pgd_index(PKMAP_BASE), PKMAP_BASE);
+
     for (; i < PTRS_PER_PGD; pgd++, i++)
     {
         if (vaddr >= end)
@@ -102,8 +112,6 @@ static void __init persist_area_init()
         }
         vaddr += PGDIR_SIZE;
     }
-
-    pkmap_page_table = pte_offset(pgd, vaddr);
 }
 
 /**

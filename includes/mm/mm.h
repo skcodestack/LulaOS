@@ -6,7 +6,8 @@
 #include <arch/x86/bitops.h>
 #include <mm/mmzone.h>
 
-
+/* 前向声明，避免循环依赖（buffer_head 定义在 block/buffer_head.h） */
+struct buffer_head;
 
 typedef struct page {
 	struct list_head list;		/* 下一页 */   
@@ -15,6 +16,11 @@ typedef struct page {
 	// wait_queue_head_t wait;		/*等待这一页的页队列*/  
 	void *virtual;			/*  内核映射地址  DMA  NORMAL,如果为null，那么肯定是higmem */
 	struct zone_struct *zone;	/* 管理区 */
+	/* --- 统一缓存（page cache + buffer cache 合并） --- */
+	struct buffer_head *buffers;	/* 挂在该页上的 buffer_head 环形链表头 */
+	unsigned long  mapping_dev;	/* 该页所属块设备（dev_t 值，用于 page cache 哈希键） */
+	unsigned long  index;		/* 该页在设备内的页索引（block / blocks_per_page） */
+	struct list_head cache_list;	/* 链入 page cache 哈希表（与 buddy list 字段分开） */
 } mem_map_t;
 
 #define get_page(p)		atomic_inc(&(p)->count)
@@ -38,6 +44,7 @@ typedef struct page {
 #define PG_arch_1		13
 #define PG_reserved		14   
 #define PG_launder		15	 
+#define PG_buffers		16	/* 该页挂载了 buffer_head（统一缓存标志） */
 
 // #define UnlockPage(page)	unlock_page(page)
 #define Page_Uptodate(page)	test_bit(PG_uptodate, &(page)->flags)
@@ -79,6 +86,11 @@ typedef struct page {
 
 #define SetPageReserved(page)		set_bit(PG_reserved, &(page)->flags)
 #define ClearPageReserved(page)		clear_bit(PG_reserved, &(page)->flags)
+
+/* 统一缓存：页挂载了 buffer_head 链表（page cache + buffer cache 合并） */
+#define PageBuffers(page)		test_bit(PG_buffers, &(page)->flags)
+#define SetPageBuffers(page)		set_bit(PG_buffers, &(page)->flags)
+#define ClearPageBuffers(page)		clear_bit(PG_buffers, &(page)->flags)
 
 
 #define set_page_count(p,v) 	atomic_set(&(p)->count, v)

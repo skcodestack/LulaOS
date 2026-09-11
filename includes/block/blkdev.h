@@ -201,7 +201,7 @@ struct gendisk *get_gendisk(dev_t dev);
  * 直接调用 bdev->bd_disk->fops->strategy()，同步阻塞直到完成。
  * 返回：0 成功，负数错误码（-EIO / -ENODEV 等）。
  *
- * 与 Linux 2.6.20 的区别：
+ * 与 Linux   的区别：
  *   Linux 原始路径：submit_bh → generic_make_request → request_queue → elevator → driver
  *   LulaOS 简化路径：submit_bh → strategy()（同步，无队列）
  */

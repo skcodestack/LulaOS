@@ -5,6 +5,7 @@
 #include <arch/x86/page.h>
 #include <arch/linkage.h>
 #include <arch/x86/pgtable.h>
+#include <mm/mm.h>   /* struct page, PageHighMem, mem_map */
 
 /**
  * 直接映射
@@ -69,6 +70,46 @@ extern pte_t *pkmap_page_table;//永久映射区 对应起始pte 4M大小
 
 // static inline void *kmap(struct page *page);
 //static inline void kunmap(struct page *page) 
+
+/*
+ * kmap - 为页面建立可访问的内核虚拟地址（pkmap 实现）
+ *
+ * 参考   mm/highmem.c kmap()
+ *
+ * 分两路处理：
+ *   ZONE_NORMAL（< 896MB）：page->virtual 已在 zone_init 时由 __va(phys) 设置，
+ *                            直接返回，零成本（覆盖 LulaOS 64MB 场景的 100% 情况）。
+ *
+ *   ZONE_HIGHMEM（> 896MB）：page->virtual 为 NULL，从 pkmap 区域分配槽位：
+ *                            pkmap_count[] 引用计数管理槽位（0=空闲，>=2=活跃），
+ *                            写入 PTE（PAGE_KERNEL，缓存启用），invlpg 刷新 TLB，
+ *                            结果缓存在 page->virtual，后续 kmap 直接命中。
+ *
+ * 与旧版 ioremap 方案的区别：
+ *   - PAGE_KERNEL（缓存启用）vs PAGE_KERNEL_NOCACHE（禁用缓存），访问速度快
+ *   - pkmap 槽位可被 kunmap 回收复用（LAST_PKMAP=1024 槽位轮转）
+ *   - ioremap 占用 vmalloc 区永不回收
+ *
+ * @page: 目标 struct page（可为任意 zone）
+ * 返回：有效内核虚拟地址，NULL 表示 pkmap 槽位耗尽
+ */
+void *kmap(struct page *page);
+
+/*
+ * kunmap - 释放 kmap 建立的 pkmap 映射
+ *
+ * 参考   mm/highmem.c kunmap()
+ *
+ * 处理逻辑：
+ *   ZONE_NORMAL（page->virtual 不在 pkmap 范围）：no-op（永久映射无需释放）
+ *   ZONE_HIGHMEM（page->virtual 在 pkmap 范围）：
+ *     ① pkmap_count[nr]--（减少引用计数）
+ *     ② 计数降为 1 时清除 PTE + invlpg 刷 TLB
+ *     ③ 清空 page->virtual（下次 kmap 重新分配槽位）
+ *
+ * 注意：buffer cache 场景通常不调用 kunmap（页长期缓存，映射持久保留）。
+ */
+void kunmap(struct page *page);
 
 /**
  *
