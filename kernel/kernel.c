@@ -24,6 +24,7 @@
 #include <usb/uhci.h>
 #include <drm/drm_core.h>
 #include <drm/drm_fb_helper.h>
+#include <video/fb.h>
 #include <block/blkdev.h>
 #include <block/buffer_head.h>
  
@@ -78,9 +79,6 @@ static int thread_init_func(void *arg){
     /* DRM 图形 API 初始化（缓存 VRAM 参数，供画点/画图等接口使用） */
     drm_fb_helper_init();
 
-    /* 绘制测试图案，验证 DRM 图片显示服务正常工作 */
-    drm_fb_test_image();
-
     /* 初始化软中断子系统（kmem_cache_init 已完成，kmalloc 可用）*/
     softirq_init();
 
@@ -88,6 +86,20 @@ static int thread_init_func(void *arg){
     smp_init();
 
     printk("Finished\n"); 
+
+    /*
+     * 绘制 DRM 测试图案，验证图片显示服务。
+     *
+     * 必须放在所有启动日志输出完之后：测试图绘制早于后续日志（如 SMP/AP
+     * 启动日志）时，日志行数会超出屏幕可容纳的行数，触发 fbcon 控制台
+     * 滚动（fbcon_scroll_up），把已绘制的测试图滚出/滚乱（表现为花屏）。
+     * 典型差异：AP 日志约 50 行，在多核（-smp 4）下触发滚动，单核下不触发。
+     *
+     * 绘制前先清屏并复位 fbcon 光标，使之后零星的异步日志（ksoftirqd 等）
+     * 只写在屏幕顶部，不再触发滚动破坏画面。
+     */
+    fbcon_clear();
+    drm_fb_test_image();
 }
 
 /*

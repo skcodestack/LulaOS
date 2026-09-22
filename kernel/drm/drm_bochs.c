@@ -165,17 +165,15 @@ static void bochs_probe_modes(struct bochs_device *bochs)
 }
 
 /*
- * bochs_set_resolution - 设置 BGA 分辨率
+ * bochs_try_set_mode - 尝试设置分辨率并读回校验
  *
- * 流程：
- *   1. 禁用显示
- *   2. 设置 X/Y 分辨率、BPP
- *   3. 设置虚拟尺寸（支持双缓冲）
- *   4. 重新启用显示
+ * Bochs 3.0 会把客户机分辨率限制在主机显示能力内（SDL2 报告的最大窗口
+ * 分辨率），超限的写入被静默拒绝（寄存器保持旧值）。因此写入后必须读回
+ * 校验：只有读回值与请求值一致，才认为硬件真正接受了该模式。
+ *
+ * 返回 1=设置成功，0=被硬件拒绝。
  */
-static void bochs_set_resolution(struct bochs_device *bochs,
-                                 uint32_t width, uint32_t height,
-                                 uint32_t bpp)
+static int bochs_try_set_mode(uint32_t width, uint32_t height, uint32_t bpp)
 {
     /* 禁用显示 */
     bochs_write_reg(BGA_REG_ENABLE, 0);
@@ -184,6 +182,77 @@ static void bochs_set_resolution(struct bochs_device *bochs,
     bochs_write_reg(BGA_REG_XRES, (uint16_t)width);
     bochs_write_reg(BGA_REG_YRES, (uint16_t)height);
     bochs_write_reg(BGA_REG_BPP, (uint16_t)bpp);
+
+    /* 读回校验（被拒绝时寄存器保持旧值） */
+    return (bochs_read_reg(BGA_REG_XRES) == (uint16_t)width &&
+            bochs_read_reg(BGA_REG_YRES) == (uint16_t)height &&
+            bochs_read_reg(BGA_REG_BPP) == (uint16_t)bpp);
+}
+
+/*
+ * bochs_set_resolution - 设置 BGA 分辨率（带回退与读回校验）
+ *
+ * 流程：
+ *   1. 依次尝试候选模式（首选 → 当前值 → 标准回退），读回校验成功为止
+ *   2. 用实际接受的模式设置虚拟尺寸（支持双缓冲）
+ *   3. 重新启用显示，并用实际值同步 fbcon / 内部状态
+ *
+ * 背景：不同环境的最大分辨率不同
+ *   - QEMU：接受 1920x1080（探测表最大值）
+ *   - Bochs 3.0：受 SDL2 主机显示能力限制（如 1024x768），超限请求被拒
+ * 若不做读回校验，BGA 停留在小分辨率而 fbcon 按大分辨率 pitch 渲染，
+ * 像素步进与实际扫描线不一致 → 花屏。
+ */
+static void bochs_set_resolution(struct bochs_device *bochs,
+                                 uint32_t width, uint32_t height,
+                                 uint32_t bpp)
+{
+    uint32_t req_width  = width;    /* 保存请求值（用于降级告警） */
+    uint32_t req_height = height;
+    uint16_t cur_w, cur_h;
+    uint32_t cand_w[5];
+    uint32_t cand_h[5];
+    int n_cand = 0;
+    int i, ok = 0;
+    uint16_t act_virt_h;
+
+    /* 读回当前模式（通常是 GRUB gfxpayload 设置的可用模式），作为第一回退候选 */
+    cur_w = bochs_read_reg(BGA_REG_XRES);
+    cur_h = bochs_read_reg(BGA_REG_YRES);
+
+    /* 构建候选模式列表：首选 → 当前值 → 标准回退 */
+    cand_w[n_cand] = width;
+    cand_h[n_cand] = height;
+    n_cand++;
+    if (cur_w >= 320 && cur_h >= 240 &&
+        (cur_w != width || cur_h != height)) {
+        cand_w[n_cand] = cur_w;
+        cand_h[n_cand] = cur_h;
+        n_cand++;
+    }
+    cand_w[n_cand] = 1024;  cand_h[n_cand] = 768;  n_cand++;
+    cand_w[n_cand] = 800;   cand_h[n_cand] = 600;  n_cand++;
+    cand_w[n_cand] = 640;   cand_h[n_cand] = 480;  n_cand++;
+
+    /* 逐个尝试直到硬件接受（Bochs 会拒绝超过主机显示上限的模式） */
+    for (i = 0; i < n_cand; i++) {
+        if (bochs_try_set_mode(cand_w[i], cand_h[i], bpp)) {
+            width  = cand_w[i];
+            height = cand_h[i];
+            ok = 1;
+            break;
+        }
+    }
+
+    if (!ok) {
+        /* 全部候选被拒（理论上不会），用寄存器当前值兜底 */
+        width  = bochs_read_reg(BGA_REG_XRES);
+        height = bochs_read_reg(BGA_REG_YRES);
+        if (width < 320 || height < 240) {
+            width = 1024;
+            height = 768;
+        }
+    }
 
     /* 设置虚拟尺寸（双缓冲：虚拟高度 = 实际高度 * 2） */
     bochs_write_reg(BGA_REG_VIRT_WIDTH, (uint16_t)width);
@@ -196,12 +265,26 @@ static void bochs_set_resolution(struct bochs_device *bochs,
     /* 启用显示（线性帧缓冲模式） */
     bochs_write_reg(BGA_REG_ENABLE, BGA_ENABLED | BGA_LINEAR_FB);
 
+    /* 读回虚拟高度：Bochs 3.0 可能忽略无法满足的虚拟尺寸（双缓冲降级，
+     * 仅影响 page_flip 的 Y 偏移，不影响前台显示） */
+    act_virt_h = bochs_read_reg(BGA_REG_VIRT_HEIGHT);
+
     bochs->current_width  = width;
     bochs->current_height = height;
     bochs->current_bpp    = bpp;
     bochs->current_pitch  = width * (bpp / 8);
-    bochs->virt_height    = height * 2;
+    bochs->virt_height    = (act_virt_h > height) ? act_virt_h : height;
     bochs->current_yoffset = 0;
+
+    if (width != req_width || height != req_height) {
+        printk("[bochs-drm] WARNING: requested %dx%d rejected by hardware "
+               "(host display limit), fallback to %dx%d\n",
+               req_width, req_height, width, height);
+    }
+    if (act_virt_h < (uint16_t)(height * 2)) {
+        printk("[bochs-drm] NOTE: virtual height %d not honored, "
+               "double buffering degraded\n", height * 2);
+    }
 
     /* 先同步 framebuffer 控制台参数，再打印日志（否则 pitch 不一致导致花屏）
      * 同时切换到 bochs->vram_virt（16MB 完整映射），避免 GRUB 小映射越界 Page Fault */
@@ -447,8 +530,8 @@ static int bochs_drm_load(struct drm_device *dev)
     if (bochs->num_supported_modes > 0) {
         struct bochs_mode *best = &bochs->supported_modes[bochs->num_supported_modes - 1];
         bochs_set_resolution(bochs, best->width, best->height, 32);
-        printk("[bochs-drm] Default mode set to largest supported: %dx%d\n",
-               best->width, best->height);
+        printk("[bochs-drm] Default mode set to: %dx%d\n",
+               bochs->current_width, bochs->current_height);
     } else {
         bochs_set_resolution(bochs, 1024, 768, 32);
     }
