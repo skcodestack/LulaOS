@@ -34,6 +34,7 @@
 #include <arch/x86/page.h>
 #include <mm/mmzone.h>
 #include <mm/slab.h>
+#include <fs.h>          /* files/fs_struct 引用计数（fork 共享 / do_exit 释放） */
 #include <stddef.h>
 
 /* ========== 全局数据 ========== */
@@ -317,6 +318,15 @@ int sys_fork(struct pt_regs *regs, unsigned long fork_flags)
     INIT_LIST_HEAD(&p->run_list);
     INIT_LIST_HEAD(&p->tasks);
 
+    /*
+     * files/fs 引用计数共享（等价 CLONE_FILES/CLONE_FS）：
+     * 浅拷贝后父子指向同一结构，计数 +1；归零方（最后一个 exit）负责回收。
+     */
+    if (p->files)
+        atomic_inc(&p->files->count);
+    if (p->fs)
+        atomic_inc(&p->fs->count);
+
     /* 重置调度状态 */
     p->counter    = p->timeslice;
     p->need_resched = 0;
@@ -405,6 +415,12 @@ int kernel_thread(int (*fn)(void *), void *arg, unsigned long flags)
     INIT_LIST_HEAD(&p->run_list);
     INIT_LIST_HEAD(&p->tasks);
 
+    /* files/fs 共享计数（内核线程通常为 NULL，防御性） */
+    if (p->files)
+        atomic_inc(&p->files->count);
+    if (p->fs)
+        atomic_inc(&p->fs->count);
+
     p->counter    = p->timeslice;
     p->need_resched = 0;
     /* flags 参数是调用者传入的线程创建标志，不写入 p->flags（内部 PF_* 标志） */
@@ -454,6 +470,19 @@ void do_exit(long code)
     unsigned long flags;
 
     (void)code;
+
+    /*
+     * 释放文件资源引用（Task 6 阶段恒 NULL，防御性；
+     * rootfs/fd 表接入后生效，最后一个引用方负责回收）
+     */
+    if (p->files) {
+        put_files_struct(p->files);
+        p->files = NULL;
+    }
+    if (p->fs) {
+        put_fs_struct(p->fs);
+        p->fs = NULL;
+    }
 
     local_irq_save(flags);
 

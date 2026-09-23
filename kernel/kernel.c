@@ -27,6 +27,7 @@
 #include <video/fb.h>
 #include <block/blkdev.h>
 #include <block/buffer_head.h>
+#include <fs.h>             /* VFS 四大对象与缓存初始化 */
  
 void _kernel_init()
 {
@@ -57,6 +58,12 @@ static int thread_init_func(void *arg){
 
     /* buffer cache 初始化（page/bh 哈希表清零，在 ata_init 之前，依赖 block_dev_init） */
     buffer_cache_init();
+
+    /* VFS 四大对象与缓存（inode/dentry/file，kmalloc 已就绪即可，与块设备零耦合） */
+    inode_init();
+    dcache_init();
+    file_table_init();
+    vfs_selftest();
 
     /* ATA 磁盘驱动初始化（PCI 驱动注册 + IDENTIFY 探测） */
     ata_init(); 
