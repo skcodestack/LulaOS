@@ -18,6 +18,10 @@
 #include <arch/x86/ptrace.h>
 #include <arch/x86/smp.h>
 
+/* VFS 资源描述（fs.h 完整定义；此处仅前向声明避免包含链扩散） */
+struct files_struct;
+struct fs_struct;
+
 /* ========== 线程堆大小 ========== */
 #define THREAD_SIZE     8192
 #define THREAD_MASK     (~(THREAD_SIZE - 1))   /* ~0x1FFF，用于 esp 屏蔽 */
@@ -64,6 +68,10 @@ struct task_struct {
     /* ---- 其他 ---- */
     unsigned long       flags;       /* PF_* */
     struct pt_regs     *pt_regs;     /* 内核栈顶保存的寄存器快照 */
+
+    /* ---- VFS 资源（Task 6；entry.S 不使用，追加在末尾不影响既有偏移） ---- */
+    struct files_struct *files;      /* fd 表（fork 引用计数共享，CLONE_FILES 语义） */
+    struct fs_struct    *fs;         /* root/pwd 工作目录（fork 共享，CLONE_FS 语义） */
 };
 
 /*
@@ -118,7 +126,9 @@ static inline struct task_struct *get_current(void)
     .tasks       = { &(tsk).tasks,  &(tsk).tasks  }, \
     .thread      = INIT_THREAD, \
     .flags       = 0, \
-    .pt_regs     = (void *)0 \
+    .pt_regs     = (void *)0, \
+    .files       = NULL, \
+    .fs          = NULL \
 }
 
 /* BSP 的初始 thread_union（.data.init_task 节，8KB 对齐） */
